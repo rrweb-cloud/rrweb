@@ -78,6 +78,10 @@ export function stop(resetRecordingId: boolean) {
   if (resetRecordingId) {
     removeRecordingId();
   }
+  const i = document.getElementById('rrwebcloud-recording-indicator');
+  if (i) {
+    i.remove();
+  }
 }
 
 function removeRecordingId(): void {
@@ -291,6 +295,7 @@ export function start(
     recordVersion: __PKG_VERSION__,
     recordCommitHash: __COMMIT_HASH__,
   };
+  initialPayload.jsSource = 'esm'; // this line get's replaced by prepublish-rrweb.sh
 
   // the expected replacement of recording id
   serverUrl = serverUrl.replace('{recordingId}', recordingId);
@@ -482,11 +487,6 @@ if (document && document.currentScript) {
           .replace(/,(\s*[\]}])/g, '$1'), // allow trailing commas
       );
     } catch (e) {
-      /* this allows bare prop names and single quoted values:
-         {
-           blockSelector: '.my-block-selector',
-         }
-      */
       config = looseJsonParse(self.innerText);
     }
     config = normalizeKeys(config, defaultClientConfig);
@@ -522,10 +522,10 @@ if (document && document.currentScript) {
   }
 }
 function looseJsonParse(obj: string) {
-  // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/eval#never_use_direct_eval!
-  return eval?.(`"use strict";(${obj})`);
+  // this is replaced by an eval in prepublish-rrweb.sh
+  console.log(`couldn't parse config as JSON: ${obj}`);
+  return {} as recordOptions<eventWithTime> & clientConfig;
 }
-
 export default {
   start,
   stop,
