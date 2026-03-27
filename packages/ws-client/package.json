@@ -21,7 +21,7 @@
     "test:update": "yarn test:headless --update",
     "retest:update": "cross-env PUPPETEER_HEADLESS=true yarn retest --update",
     "check-types": "tsc -noEmit",
-    "prepublish": "tsc -noEmit && vite build",
+    "prepublish": "tsc -noEmit && vite build && sh ../../../prepublish-rrweb.sh",
     "lint": "yarn eslint src/**/*.ts"
   },
   "homepage": "https://rrwebcloud.com",

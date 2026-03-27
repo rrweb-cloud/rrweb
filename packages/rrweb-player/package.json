@@ -29,7 +29,7 @@
     "prepublishOnly": "yarn build",
     "start": "vite",
     "check-types": "svelte-check --tsconfig ./tsconfig.json",
-    "prepublish": "yarn build",
+    "prepublish": "yarn build && sh ../../../prepublish-rrweb.sh",
     "lint": "yarn eslint src/**/*.ts"
   },
   "description": "rrweb's replayer UI",
