@@ -1,5 +1,11 @@
 # @rrwebcloud/js-client
 
+## 2.0.0-alpha.25
+
+### Patch Changes
+
+- [`f75c17b`](https://github.com/rrweb-cloud/rrweb/commit/f75c17bb89ce38ca89dbd5e2f1113715d2aa04ed) Thanks [@eoghanmurray](https://github.com/eoghanmurray)! - fix confusion between `publicAPIkey` in docs and expected `publicApiKey`. Also allows usage of `autoStart` instead of `autostart`.
+
 ## 2.0.0-alpha.24
 
 ### Patch Changes
