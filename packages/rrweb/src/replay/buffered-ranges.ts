@@ -80,7 +80,8 @@ export function planFetchWindow(
   keyframe: number | null,
   target: number,
 ): { from: number; gapEnd?: number } {
-  const containing = keyframe !== null ? ranges.rangeContaining(keyframe) : null;
+  const containing =
+    keyframe !== null ? ranges.rangeContaining(keyframe) : null;
   let from: number;
   if (containing) {
     from = containing.end + 1;

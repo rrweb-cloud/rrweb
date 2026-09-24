@@ -642,9 +642,7 @@ export class Replayer {
   }
 
   private isBufferEndMarker(event: eventWithTime): boolean {
-    return (
-      event.type === EventType.Custom && event.data.tag === BUFFER_END_TAG
-    );
+    return event.type === EventType.Custom && event.data.tag === BUFFER_END_TAG;
   }
 
   private markerBufferedTo(event: eventWithTime): number {
@@ -738,7 +736,9 @@ export class Replayer {
       return;
     }
     const currentTime = this.getCurrentTime();
-    if (Math.abs(currentTime - this.lastBufferCheckAt) < BUFFER_CHECK_INTERVAL_MS) {
+    if (
+      Math.abs(currentTime - this.lastBufferCheckAt) < BUFFER_CHECK_INTERVAL_MS
+    ) {
       return;
     }
     this.lastBufferCheckAt = currentTime;

@@ -1,8 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  BufferedRanges,
-  planFetchWindow,
-} from '../src/replay/buffered-ranges';
+import { BufferedRanges, planFetchWindow } from '../src/replay/buffered-ranges';
 
 describe('BufferedRanges', () => {
   it('starts empty', () => {
