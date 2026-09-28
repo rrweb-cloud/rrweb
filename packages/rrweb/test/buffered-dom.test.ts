@@ -110,7 +110,9 @@ describe('buffered-dom replay', function () {
     await page.evaluate(`var truncated = ${JSON.stringify(truncatedRecording)};
       var continuation = ${JSON.stringify(continuation)};
       var multiKeyframe = ${JSON.stringify(multiKeyframeRecording)};
-      var syntheticContinuation = ${JSON.stringify(syntheticSnapshotContinuation)};
+      var syntheticContinuation = ${JSON.stringify(
+        syntheticSnapshotContinuation,
+      )};
       var T = ${T};`);
     page.on('console', (msg) => console.log('PAGE LOG:', msg.text()));
   });
