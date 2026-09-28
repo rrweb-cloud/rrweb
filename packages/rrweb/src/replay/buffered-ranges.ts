@@ -79,17 +79,19 @@ export function planFetchWindow(
   ranges: BufferedRanges,
   keyframe: number | null,
   target: number,
-): { from: number; gapEnd?: number } {
+): { from: number; gapStart?: number; gapEnd?: number } {
   const containing =
     keyframe !== null ? ranges.rangeContaining(keyframe) : null;
   let from: number;
+  let gapStart: number | undefined;
   if (containing) {
     from = containing.end + 1;
   } else if (keyframe !== null) {
-    from = keyframe;
+    from = target;
+    gapStart = keyframe;
   } else {
     from = target;
   }
   const gapEnd = ranges.nextRangeStartAfter(from);
-  return { from, gapEnd: gapEnd ?? undefined };
+  return { from, gapStart, gapEnd: gapEnd ?? undefined };
 }

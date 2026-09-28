@@ -134,20 +134,22 @@ describe('BufferedRanges', () => {
 });
 
 describe('planFetchWindow', () => {
-  it('extends from the frontier when the keyframe is inside a buffered range', () => {
+  it('extends from the frontier (no gapStart) when the keyframe is inside a buffered range', () => {
     const b = new BufferedRanges();
     b.add(0, 2000);
     expect(planFetchWindow(b, 1000, 2500)).toEqual({
       from: 2001,
+      gapStart: undefined,
       gapEnd: undefined,
     });
   });
 
-  it('opens a fresh range at the keyframe when nothing covers it', () => {
+  it('sends the playhead as from and the keyframe as gapStart when nothing covers it', () => {
     const b = new BufferedRanges();
     b.add(0, 2000);
     expect(planFetchWindow(b, 25000, 30000)).toEqual({
-      from: 25000,
+      from: 30000,
+      gapStart: 25000,
       gapEnd: undefined,
     });
   });
@@ -158,6 +160,7 @@ describe('planFetchWindow', () => {
     b.add(25000, 30000);
     expect(planFetchWindow(b, 1000, 8000)).toEqual({
       from: 2001,
+      gapStart: undefined,
       gapEnd: 25000,
     });
   });
@@ -166,6 +169,7 @@ describe('planFetchWindow', () => {
     const b = new BufferedRanges();
     expect(planFetchWindow(b, null, 5000)).toEqual({
       from: 5000,
+      gapStart: undefined,
       gapEnd: undefined,
     });
   });

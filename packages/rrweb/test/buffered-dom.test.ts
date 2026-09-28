@@ -42,6 +42,22 @@ const continuation: eventWithTime[] = [
   bufferEndMarker(T + 4000),
 ];
 
+const multiKeyframeRecording: eventWithTime[] = [
+  DCL,
+  META,
+  FULLSNAPSHOT,
+  CLICK,
+  bufferEndMarker(T + 2000),
+  { ...META, timestamp: T + 5000 },
+  { ...CLICK, timestamp: T + 8000 },
+  { ...CLICK, timestamp: T + 10000 },
+];
+
+const syntheticSnapshotContinuation: eventWithTime[] = [
+  { ...FULLSNAPSHOT, timestamp: T + 5500 },
+  bufferEndMarker(T + 10000),
+];
+
 async function bundleReplayer(): Promise<string> {
   const rrwebDir = path.resolve(__dirname, '..');
   const typesSrc = path.resolve(rrwebDir, '../types/src/index.ts');
@@ -93,6 +109,8 @@ describe('buffered-dom replay', function () {
     await page.evaluate(code);
     await page.evaluate(`var truncated = ${JSON.stringify(truncatedRecording)};
       var continuation = ${JSON.stringify(continuation)};
+      var multiKeyframe = ${JSON.stringify(multiKeyframeRecording)};
+      var syntheticContinuation = ${JSON.stringify(syntheticSnapshotContinuation)};
       var T = ${T};`);
     page.on('console', (msg) => console.log('PAGE LOG:', msg.text()));
   });
@@ -158,5 +176,31 @@ describe('buffered-dom replay', function () {
     expect(result.calls[0].speed).toBe(1);
     expect(result.emitted).toEqual([['start', T + 2500], ['end']]);
     expect(result.ranges).toEqual([{ start: T, end: T + 4000 }]);
+  });
+
+  it('on a jump, sends from=playhead + gapStart=keyframe and anchors coverage at the returned (synthetic) snapshot, not gapStart', async () => {
+    const result = await page.evaluate(`
+      (async () => {
+        const { Replayer, ReplayerEvents } = rrweb;
+        const calls = [];
+        const emitted = [];
+        const replayer = new Replayer(multiKeyframe, {
+          fetchEvents: (req) => { calls.push(req); return Promise.resolve(syntheticContinuation); },
+        });
+        replayer.on(ReplayerEvents.BufferingStart, (d) => emitted.push(['start', d.target]));
+        replayer.on(ReplayerEvents.BufferingEnd, () => emitted.push(['end']));
+        replayer.play(6000);
+        await new Promise((r) => setTimeout(r, 300));
+        return { calls, emitted, ranges: replayer.getBufferedRanges() };
+      })();
+    `);
+    expect(result.calls).toHaveLength(1);
+    expect(result.calls[0].from).toBe(T + 6000);
+    expect(result.calls[0].gapStart).toBe(T + 5000);
+    expect(result.emitted).toEqual([['start', T + 6000], ['end']]);
+    expect(result.ranges).toEqual([
+      { start: T, end: T + 2000 },
+      { start: T + 5500, end: T + 10000 },
+    ]);
   });
 });

@@ -197,6 +197,7 @@ export class Replayer {
   private fetchInFlight = false;
   private pendingFetchFrom: number | null = null;
   private lastFetchSawMarker = false;
+  private lastFetchFullSnapshotTs: number | null = null;
   private lastBufferCheckAt = -Infinity;
   private fetchWatchdog: ReturnType<typeof setTimeout> | -1 = -1;
 
@@ -683,8 +684,9 @@ export class Replayer {
       return false;
     }
     const bufferedTo = this.markerBufferedTo(event);
-    const from = this.pendingFetchFrom ?? bufferedTo;
-    this.bufferedRanges.add(from, bufferedTo);
+    const rangeStart =
+      this.lastFetchFullSnapshotTs ?? this.pendingFetchFrom ?? bufferedTo;
+    this.bufferedRanges.add(rangeStart, bufferedTo);
     this.lastFetchSawMarker = true;
     return true;
   }
@@ -718,6 +720,7 @@ export class Replayer {
 
   private computeFetchWindow(target: number): {
     from: number;
+    gapStart?: number;
     gapEnd?: number;
   } {
     return planFetchWindow(
@@ -754,7 +757,7 @@ export class Replayer {
       playhead >= frontier - this.config.bufferAheadMs
     ) {
       const gapEnd = this.bufferedRanges.nextRangeStartAfter(frontier);
-      void this.doFetch(frontier + 1, gapEnd ?? undefined);
+      void this.doFetch(frontier + 1, undefined, gapEnd ?? undefined);
     }
   };
 
@@ -769,8 +772,8 @@ export class Replayer {
     this.wasPlayingBeforeStall = resumePlaying;
     this.service.send({ type: 'PAUSE' });
     this.emitter.emit(ReplayerEvents.BufferingStart, { target });
-    const { from, gapEnd } = this.computeFetchWindow(target);
-    void this.doFetch(from, gapEnd);
+    const { from, gapStart, gapEnd } = this.computeFetchWindow(target);
+    void this.doFetch(from, gapStart, gapEnd);
   }
 
   private maybeResumeFromStall() {
@@ -780,8 +783,8 @@ export class Replayer {
     const target = this.bufferTarget;
     if (!this.bufferedRanges.covers(target) && target < this.recordingEndTs) {
       if (!this.fetchInFlight) {
-        const { from, gapEnd } = this.computeFetchWindow(target);
-        void this.doFetch(from, gapEnd);
+        const { from, gapStart, gapEnd } = this.computeFetchWindow(target);
+        void this.doFetch(from, gapStart, gapEnd);
       }
       return;
     }
@@ -795,7 +798,7 @@ export class Replayer {
     }
   }
 
-  private armFetchWatchdog(from: number, gapEnd?: number) {
+  private armFetchWatchdog(from: number, gapStart?: number, gapEnd?: number) {
     this.clearFetchWatchdog();
     this.fetchWatchdog = setTimeout(() => {
       this.fetchWatchdog = -1;
@@ -804,10 +807,10 @@ export class Replayer {
       }
       this.fetchInFlight = false;
       this.pendingFetchFrom = null;
-      this.warn('[replayer] fetchEvents timed out', { from, gapEnd });
+      this.warn('[replayer] fetchEvents timed out', { from, gapStart, gapEnd });
       if (this.bufferTarget !== null) {
         const window = this.computeFetchWindow(this.bufferTarget);
-        void this.doFetch(window.from, window.gapEnd);
+        void this.doFetch(window.from, window.gapStart, window.gapEnd);
       }
     }, this.config.bufferFetchTimeout);
   }
@@ -819,19 +822,25 @@ export class Replayer {
     }
   }
 
-  private async doFetch(from: number, gapEnd?: number): Promise<void> {
+  private async doFetch(
+    from: number,
+    gapStart?: number,
+    gapEnd?: number,
+  ): Promise<void> {
     if (!this.config.fetchEvents || this.fetchInFlight) {
       return;
     }
     this.fetchInFlight = true;
-    this.pendingFetchFrom = from;
+    this.pendingFetchFrom = gapStart ?? from;
     this.lastFetchSawMarker = false;
+    this.lastFetchFullSnapshotTs = null;
     const request: BufferFetchRequest = {
       from,
+      gapStart,
       gapEnd,
       speed: this.timer.speed,
     };
-    this.armFetchWatchdog(from, gapEnd);
+    this.armFetchWatchdog(from, gapStart, gapEnd);
     let batch: Array<eventWithTime | string>;
     try {
       batch = await this.config.fetchEvents(request);
@@ -851,11 +860,18 @@ export class Replayer {
       if (event.timestamp > maxTs) {
         maxTs = event.timestamp;
       }
+      if (
+        event.type === EventType.FullSnapshot &&
+        this.lastFetchFullSnapshotTs === null
+      ) {
+        this.lastFetchFullSnapshotTs = event.timestamp;
+      }
       this.ingestEvent(event);
     }
     if (!this.lastFetchSawMarker && batch.length > 0) {
+      const rangeStart = this.lastFetchFullSnapshotTs ?? gapStart ?? from;
       const to = gapEnd ? Math.min(maxTs, gapEnd - 1) : this.recordingEndTs;
-      this.bufferedRanges.add(from, to);
+      this.bufferedRanges.add(rangeStart, to);
     }
     this.fetchInFlight = false;
     this.pendingFetchFrom = null;

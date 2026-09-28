@@ -211,6 +211,7 @@ export type playerConfig = {
 
 export type BufferFetchRequest = {
   from: number;
+  gapStart?: number;
   gapEnd?: number;
   speed: number;
 };
