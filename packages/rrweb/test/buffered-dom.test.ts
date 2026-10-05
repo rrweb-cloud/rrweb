@@ -58,6 +58,16 @@ const syntheticSnapshotContinuation: eventWithTime[] = [
   bufferEndMarker(T + 10000),
 ];
 
+const boundaryRecording: eventWithTime[] = [
+  DCL,
+  { ...META, timestamp: T + 1 },
+  { ...FULLSNAPSHOT, timestamp: T + 1 },
+  { ...CLICK, timestamp: T + 100 },
+  bufferEndMarker(T + 100),
+  { ...CLICK, timestamp: T + 200 },
+  { ...CLICK, timestamp: T + 300 },
+];
+
 async function bundleReplayer(): Promise<string> {
   const rrwebDir = path.resolve(__dirname, '..');
   const typesSrc = path.resolve(rrwebDir, '../types/src/index.ts');
@@ -113,6 +123,7 @@ describe('buffered-dom replay', function () {
       var syntheticContinuation = ${JSON.stringify(
         syntheticSnapshotContinuation,
       )};
+      var boundaryRecording = ${JSON.stringify(boundaryRecording)};
       var T = ${T};`);
     page.on('console', (msg) => console.log('PAGE LOG:', msg.text()));
   });
@@ -204,5 +215,50 @@ describe('buffered-dom replay', function () {
       { start: T, end: T + 2000 },
       { start: T + 5500, end: T + 10000 },
     ]);
+  });
+
+  it('playing into the frontier stalls there and casts nothing past bufferedTo while the fetch is pending', async () => {
+    const result = await page.evaluate(`
+      (async () => {
+        const { Replayer, ReplayerEvents } = rrweb;
+        const emitted = [];
+        const castTimestamps = [];
+        const replayer = new Replayer(boundaryRecording, {
+          fetchEvents: () => new Promise(() => {}),
+        });
+        replayer.on(ReplayerEvents.BufferingStart, () => emitted.push('start'));
+        replayer.on(ReplayerEvents.EventCast, (e) => castTimestamps.push(e.timestamp));
+        replayer.play(0);
+        await new Promise((r) => setTimeout(r, 400));
+        return { emitted, maxCast: Math.max(0, ...castTimestamps) };
+      })();
+    `);
+    expect(result.emitted).toContain('start');
+    expect(result.maxCast).toBeLessThanOrEqual(T + 100);
+  });
+
+  it('playing into the frontier continues seamlessly (no stall) when the prefetch extends coverage first', async () => {
+    const result = await page.evaluate(`
+      (async () => {
+        const { Replayer, ReplayerEvents } = rrweb;
+        const emitted = [];
+        const castTimestamps = [];
+        let finished = false;
+        const replayer = new Replayer(boundaryRecording, {
+          fetchEvents: () => Promise.resolve([
+            { type: 5, timestamp: T + 300, data: { tag: 'buffer-end', payload: { bufferedTo: T + 300 } } },
+          ]),
+        });
+        replayer.on(ReplayerEvents.BufferingStart, () => emitted.push('start'));
+        replayer.on(ReplayerEvents.EventCast, (e) => castTimestamps.push(e.timestamp));
+        replayer.on(ReplayerEvents.Finish, () => { finished = true; });
+        replayer.play(0);
+        await new Promise((r) => setTimeout(r, 500));
+        return { emitted, maxCast: Math.max(0, ...castTimestamps), finished };
+      })();
+    `);
+    expect(result.emitted).not.toContain('start');
+    expect(result.maxCast).toBe(T + 300);
+    expect(result.finished).toBe(true);
   });
 });

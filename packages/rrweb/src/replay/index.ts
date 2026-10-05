@@ -392,6 +392,12 @@ export class Replayer {
         getCastFn: this.getCastFn,
         applyEventsSynchronously: this.applyEventsSynchronously,
         emitter: this.emitter,
+        getPlayableFrontier: this.config.fetchEvents
+          ? this.getPlayableFrontier
+          : undefined,
+        onPlaybackBoundary: this.config.fetchEvents
+          ? this.onPlaybackBoundary
+          : undefined,
       },
     );
     this.service.start();
@@ -748,7 +754,6 @@ export class Replayer {
     const playhead = events[0].timestamp + currentTime;
     const frontier = this.bufferedRanges.frontierAt(playhead);
     if (frontier === null) {
-      this.stall(playhead);
       return;
     }
     if (
@@ -760,6 +765,39 @@ export class Replayer {
       void this.doFetch(frontier + 1, undefined, gapEnd ?? undefined);
     }
   };
+
+  private getPlayableFrontier = (baselineTime: number): number | null => {
+    if (!this.config.fetchEvents) {
+      return null;
+    }
+    return this.bufferedRanges.frontierAt(baselineTime) ?? baselineTime;
+  };
+
+  private onPlaybackBoundary = () => {
+    if (!this.config.fetchEvents) {
+      return;
+    }
+    void Promise.resolve().then(() => this.resolvePlaybackBoundary());
+  };
+
+  private resolvePlaybackBoundary() {
+    if (
+      this.bufferTarget !== null ||
+      !this.service.state.matches('playing')
+    ) {
+      return;
+    }
+    const { events } = this.service.state.context;
+    const offset = this.getCurrentTime();
+    const playhead = events[0].timestamp + offset;
+    const frontier = this.bufferedRanges.frontierAt(playhead);
+    if (frontier !== null && frontier > playhead) {
+      this.service.send({ type: 'PAUSE' });
+      this.service.send({ type: 'PLAY', payload: { timeOffset: offset } });
+    } else if (playhead < this.recordingEndTs) {
+      this.stall(playhead);
+    }
+  }
 
   private stall(
     target: number,
@@ -1705,6 +1743,7 @@ export class Replayer {
   private applyMutation(d: mutationData, isSync: boolean) {
     // Only apply virtual dom optimization if the fast-forward process has node mutation. Because the cost of creating a virtual dom tree and executing the diff algorithm is usually higher than directly applying other kind of events.
     if (this.config.useVirtualDom && !this.usingVirtualDom && isSync) {
+      debugger;
       this.usingVirtualDom = true;
       buildFromDom(this.iframe.contentDocument!, this.mirror, this.virtualDom);
       // If these legacy missing nodes haven't been resolved, they should be converted to virtual nodes.
@@ -2013,7 +2052,7 @@ export class Replayer {
       }
     };
 
-    d.adds.forEach((mutation) => {
+    d.adds.forEach((mutation) => {      
       appendNode(mutation);
     });
 

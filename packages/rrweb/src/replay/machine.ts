@@ -82,10 +82,18 @@ type PlayerAssets = {
   emitter: Emitter;
   applyEventsSynchronously(events: Array<eventWithTime>): void;
   getCastFn(event: eventWithTime, isSync: boolean): () => void;
+  getPlayableFrontier?: (baselineTime: number) => number | null;
+  onPlaybackBoundary?: () => void;
 };
 export function createPlayerService(
   context: PlayerContext,
-  { getCastFn, applyEventsSynchronously, emitter }: PlayerAssets,
+  {
+    getCastFn,
+    applyEventsSynchronously,
+    emitter,
+    getPlayableFrontier,
+    onPlaybackBoundary,
+  }: PlayerAssets,
 ) {
   const playerMachine = createMachine<PlayerContext, PlayerEvent, PlayerState>(
     {
@@ -191,6 +199,9 @@ export function createPlayerService(
             emitter.emit(ReplayerEvents.PlayBack);
           }
 
+          const frontier = getPlayableFrontier
+            ? getPlayableFrontier(baselineTime)
+            : null;
           const syncEvents = new Array<eventWithTime>();
           for (const event of neededEvents) {
             if (
@@ -200,6 +211,9 @@ export function createPlayerService(
                 event === lastPlayedEvent)
             ) {
               continue;
+            }
+            if (frontier !== null && event.timestamp > frontier) {
+              break;
             }
             if (event.timestamp < baselineTime) {
               syncEvents.push(event);
@@ -215,6 +229,17 @@ export function createPlayerService(
           }
           applyEventsSynchronously(syncEvents);
           emitter.emit(ReplayerEvents.Flush);
+          const lastTs = events.length
+            ? events[events.length - 1].timestamp
+            : baselineTime;
+          if (frontier !== null && frontier < lastTs && onPlaybackBoundary) {
+            timer.addAction({
+              doAction: () => {
+                onPlaybackBoundary();
+              },
+              delay: frontier - baselineTime,
+            });
+          }
           timer.start();
         },
         pause(ctx) {
