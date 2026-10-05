@@ -875,6 +875,7 @@ export class Replayer {
     }
     this.fetchInFlight = false;
     this.pendingFetchFrom = null;
+    await Promise.resolve();
     this.maybeResumeFromStall();
   }
 
