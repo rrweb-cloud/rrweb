@@ -205,7 +205,6 @@ export type playerConfig = {
   };
   plugins?: ReplayPlugin[];
   fetchEvents?: BufferFetchFn;
-  bufferAheadMs: number;
   bufferFetchTimeout: number;
 };
 

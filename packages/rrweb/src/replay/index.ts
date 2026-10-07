@@ -101,7 +101,6 @@ const SKIP_TIME_INTERVAL = 5 * 1000;
 
 const BUFFER_END_TAG = 'buffer-end';
 
-const BUFFER_CHECK_INTERVAL_MS = 500;
 
 // https://github.com/rollup/rollup/issues/1267#issuecomment-296395734
 const mitt = mittProxy.default || mittProxy;
@@ -198,7 +197,7 @@ export class Replayer {
   private pendingFetchFrom: number | null = null;
   private lastFetchSawMarker = false;
   private lastFetchFullSnapshotTs: number | null = null;
-  private lastBufferCheckAt = -Infinity;
+  private lastChunkSpanMs = 0;
   private fetchWatchdog: ReturnType<typeof setTimeout> | -1 = -1;
 
   constructor(
@@ -226,7 +225,6 @@ export class Replayer {
       mouseTail: defaultMouseTailConfig,
       useVirtualDom: true, // Virtual-dom optimization is enabled by default.
       logger: console,
-      bufferAheadMs: 15 * 1000,
       bufferFetchTimeout: 30 * 1000,
     };
     this.config = Object.assign({}, defaultConfig, config);
@@ -681,6 +679,7 @@ export class Replayer {
       this.bufferedRanges.add(firstTs, this.recordingEndTs);
     } else {
       this.bufferedRanges.add(firstTs, bufferedTo);
+      this.lastChunkSpanMs = bufferedTo - firstTs;
     }
     return kept;
   }
@@ -690,9 +689,12 @@ export class Replayer {
       return false;
     }
     const bufferedTo = this.markerBufferedTo(event);
-    const rangeStart =
-      this.lastFetchFullSnapshotTs ?? this.pendingFetchFrom ?? bufferedTo;
+    const from = this.pendingFetchFrom ?? bufferedTo;
+    const rangeStart = this.lastFetchFullSnapshotTs ?? from;
     this.bufferedRanges.add(rangeStart, bufferedTo);
+    if (bufferedTo > from) {
+      this.lastChunkSpanMs = bufferedTo - from;
+    }
     this.lastFetchSawMarker = true;
     return true;
   }
@@ -744,14 +746,7 @@ export class Replayer {
     if (!events.length) {
       return;
     }
-    const currentTime = this.getCurrentTime();
-    if (
-      Math.abs(currentTime - this.lastBufferCheckAt) < BUFFER_CHECK_INTERVAL_MS
-    ) {
-      return;
-    }
-    this.lastBufferCheckAt = currentTime;
-    const playhead = events[0].timestamp + currentTime;
+    const playhead = events[0].timestamp + this.getCurrentTime();
     const frontier = this.bufferedRanges.frontierAt(playhead);
     if (frontier === null) {
       return;
@@ -759,7 +754,7 @@ export class Replayer {
     if (
       frontier < this.recordingEndTs &&
       !this.fetchInFlight &&
-      playhead >= frontier - this.config.bufferAheadMs
+      playhead >= frontier - this.lastChunkSpanMs / 2
     ) {
       const gapEnd = this.bufferedRanges.nextRangeStartAfter(frontier);
       void this.doFetch(frontier + 1, undefined, gapEnd ?? undefined);
