@@ -57,7 +57,7 @@ const tagMap: tagMap = {
 };
 function getTagName(n: elementNode): string {
   let tagName = tagMap[n.tagName] ? tagMap[n.tagName] : n.tagName;
-  if (tagName === 'link' && n.attributes._cssText) {
+  if (tagName === 'link' && n.attributes?._cssText) {
     tagName = 'style';
   }
   return tagName;
@@ -459,7 +459,7 @@ function buildNode(
             // Backup original img src. It may not have been set yet.
             image.setAttribute(
               'rrweb-original-src',
-              n.attributes.src as string,
+              n.attributes?.src as string,
             );
             image.src = value.toString();
           }
@@ -604,8 +604,7 @@ export function buildNodeWithSN(
       // this is needed as document.createElement('iframe') otherwise inherits a CSS1Compat mode from the parent replayer environment
       if (
         n.childNodes[0].type === NodeType.Element &&
-        'xmlns' in n.childNodes[0].attributes &&
-        n.childNodes[0].attributes.xmlns === 'http://www.w3.org/1999/xhtml'
+        n.childNodes[0].attributes?.xmlns === 'http://www.w3.org/1999/xhtml'
       ) {
         // might as well use an xhtml doctype if we've got an xhtml namespace
         doc.write(

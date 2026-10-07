@@ -1819,7 +1819,7 @@ export class Replayer {
                   );
                   // Update mirror meta's attributes
                   Object.assign(
-                    newSn.attributes,
+                    (newSn.attributes ??= {}),
                     mutation.attributes as attributes,
                   );
                   const siblingNode = target.nextSibling;
