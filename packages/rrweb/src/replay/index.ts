@@ -101,7 +101,6 @@ const SKIP_TIME_INTERVAL = 5 * 1000;
 
 const BUFFER_END_TAG = 'buffer-end';
 
-
 // https://github.com/rollup/rollup/issues/1267#issuecomment-296395734
 const mitt = mittProxy.default || mittProxy;
 
@@ -776,10 +775,7 @@ export class Replayer {
   };
 
   private resolvePlaybackBoundary() {
-    if (
-      this.bufferTarget !== null ||
-      !this.service.state.matches('playing')
-    ) {
+    if (this.bufferTarget !== null || !this.service.state.matches('playing')) {
       return;
     }
     const { events } = this.service.state.context;
@@ -2047,7 +2043,7 @@ export class Replayer {
       }
     };
 
-    d.adds.forEach((mutation) => {      
+    d.adds.forEach((mutation) => {
       appendNode(mutation);
     });
 
