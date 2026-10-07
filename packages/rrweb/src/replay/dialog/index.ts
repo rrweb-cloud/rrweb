@@ -18,7 +18,7 @@ export function applyDialogToTopLevel(
   const rrOpenMode = dialog.getAttribute('rr_open_mode');
 
   const newIsOpen =
-    typeof attributeMutation?.attributes.open === 'string' ||
+    typeof attributeMutation?.attributes?.open === 'string' ||
     typeof dialog.getAttribute('open') === 'string';
   const newIsModalState = rrOpenMode === 'modal';
   const newIsNonModalState = rrOpenMode === 'non-modal';
@@ -60,7 +60,7 @@ export function removeDialogFromTopLevel(
     return;
   }
 
-  if (attributeMutation.attributes.open === null) {
+  if (attributeMutation.attributes?.open === null) {
     dialog.removeAttribute('open');
     dialog.removeAttribute('rr_open_mode');
   }
