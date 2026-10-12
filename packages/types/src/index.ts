@@ -378,7 +378,7 @@ export type attributeCursor = {
 };
 export type attributeMutation = {
   id: number;
-  attributes: {
+  attributes?: {
     [key: string]: string | styleOMValue | null;
   };
 };
@@ -867,7 +867,7 @@ export type mediaAttributes = {
 export type elementNode = {
   type: NodeType.Element;
   tagName: string;
-  attributes: attributes;
+  attributes?: attributes;
   childNodes: serializedNodeWithId[];
   isSVG?: true;
   needBlock?: boolean;
