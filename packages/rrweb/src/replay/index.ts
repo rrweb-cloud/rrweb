@@ -196,7 +196,7 @@ export class Replayer {
   private fetchInFlight = false;
   private pendingFetchFrom: number | null = null;
   private lastFetchSawMarker = false;
-  private lastFetchFullSnapshotTs: number | null = null;
+  private firstFetchSnapshotTs: number | null = null;
   private lastChunkSpanMs = 0;
   private fetchWatchdog: ReturnType<typeof setTimeout> | -1 = -1;
 
@@ -690,7 +690,7 @@ export class Replayer {
     }
     const bufferedTo = this.markerBufferedTo(event);
     const from = this.pendingFetchFrom ?? bufferedTo;
-    const rangeStart = this.lastFetchFullSnapshotTs ?? from;
+    const rangeStart = this.firstFetchSnapshotTs ?? from;
     this.bufferedRanges.add(rangeStart, bufferedTo);
     if (bufferedTo > from) {
       this.lastChunkSpanMs = bufferedTo - from;
@@ -866,7 +866,7 @@ export class Replayer {
     this.fetchInFlight = true;
     this.pendingFetchFrom = gapStart ?? from;
     this.lastFetchSawMarker = false;
-    this.lastFetchFullSnapshotTs = null;
+    this.firstFetchSnapshotTs = null;
     const request: BufferFetchRequest = {
       from,
       gapStart,
@@ -886,6 +886,7 @@ export class Replayer {
     }
     this.clearFetchWatchdog();
     let maxTs = from;
+    let sawFirstEvent = false;
     for (const raw of batch) {
       const event = this.config.unpackFn
         ? this.config.unpackFn(raw as string)
@@ -893,16 +894,16 @@ export class Replayer {
       if (event.timestamp > maxTs) {
         maxTs = event.timestamp;
       }
-      if (
-        event.type === EventType.FullSnapshot &&
-        this.lastFetchFullSnapshotTs === null
-      ) {
-        this.lastFetchFullSnapshotTs = event.timestamp;
+      if (!sawFirstEvent && !this.isBufferEndMarker(event)) {
+        sawFirstEvent = true;
+        if (event.type === EventType.FullSnapshot) {
+          this.firstFetchSnapshotTs = event.timestamp;
+        }
       }
       this.ingestEvent(event);
     }
     if (!this.lastFetchSawMarker && batch.length > 0) {
-      const rangeStart = this.lastFetchFullSnapshotTs ?? gapStart ?? from;
+      const rangeStart = this.firstFetchSnapshotTs ?? from;
       const to = gapEnd ? Math.min(maxTs, gapEnd - 1) : this.recordingEndTs;
       this.bufferedRanges.add(rangeStart, to);
     }
