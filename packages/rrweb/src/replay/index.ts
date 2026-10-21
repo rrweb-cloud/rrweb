@@ -33,6 +33,7 @@ import { Timer } from './timer';
 import {
   createPlayerService,
   createSpeedService,
+  injectEvent,
   type PlayerMachineState,
   type SpeedMachineState,
 } from './machine';
@@ -115,6 +116,35 @@ function indicatesTouchDevice(e: eventWithTime) {
   );
 }
 
+type SegmentInfo = {
+  segmentStart: number;
+  keyframe: boolean;
+  fetched: boolean;
+  fetching: boolean;
+  attempts: number;
+  markerInserted: boolean;
+};
+
+const maxSegmentFetchAttempts = 3;
+const maxConcurrentFetches = 3;
+
+function isSegmentStartMarker(event: eventWithTime): boolean {
+  return event.type === EventType.Custom && event.data.tag === 'segment-start';
+}
+
+function markerSegmentStart(event: eventWithTime): number {
+  const payload = (event.data as { payload?: { segmentStart?: number } })
+    .payload;
+  return typeof payload?.segmentStart === 'number'
+    ? payload.segmentStart
+    : event.timestamp;
+}
+
+function markerIsKeyframe(event: eventWithTime): boolean {
+  const payload = (event.data as { payload?: { keyframe?: boolean } }).payload;
+  return payload?.keyframe === true;
+}
+
 export class Replayer {
   public wrapper: HTMLDivElement;
   public iframe: HTMLIFrameElement;
@@ -179,6 +209,10 @@ export class Replayer {
   // Similar to the reason for constructedStyleMutations.
   private adoptedStyleSheets: adoptedStyleSheetData[] = [];
 
+  private segments = new Map<number, SegmentInfo>();
+  private recordingEndTs = 0;
+  private bufferingTarget: { offset: number; play: boolean } | null = null;
+
   constructor(
     events: Array<eventWithTime | string>,
     config?: Partial<playerConfig>,
@@ -204,6 +238,7 @@ export class Replayer {
       mouseTail: defaultMouseTailConfig,
       useVirtualDom: true, // Virtual-dom optimization is enabled by default.
       logger: console,
+      bufferAheadMs: 30 * 1000,
     };
     this.config = Object.assign({}, defaultConfig, config);
 
@@ -343,17 +378,20 @@ export class Replayer {
 
     const timer = new Timer([], {
       speed: this.config.speed,
+      onExhausted: this.onTimerExhausted,
+      onNearEnd: this.onPrefetchAlarm,
+      nearEndLead: this.config.bufferAheadMs,
     });
+    const unpackFn = config && config.unpackFn;
+    const initialEvents = (
+      unpackFn
+        ? events.map((e) => unpackFn(e as string))
+        : (events as eventWithTime[])
+    ).sort((a1, a2) => a1.timestamp - a2.timestamp);
+    this.indexInitialEvents(initialEvents);
     this.service = createPlayerService(
       {
-        events: events
-          .map((e) => {
-            if (config && config.unpackFn) {
-              return config.unpackFn(e as string);
-            }
-            return e as eventWithTime;
-          })
-          .sort((a1, a2) => a1.timestamp - a2.timestamp),
+        events: initialEvents,
         timer,
         timeOffset: 0,
         baselineTime: 0,
@@ -363,6 +401,8 @@ export class Replayer {
         getCastFn: this.getCastFn,
         applyEventsSynchronously: this.applyEventsSynchronously,
         emitter: this.emitter,
+        onEnterBuffering: this.onEnterBuffering,
+        onExitBuffering: this.onExitBuffering,
       },
     );
     this.service.start();
@@ -421,9 +461,6 @@ export class Replayer {
           (firstFullsnapshot as fullSnapshotEvent).data.initialOffset,
         );
       }, 1);
-    }
-    if (this.service.state.context.events.find(indicatesTouchDevice)) {
-      this.mouse.classList.add('touch-device');
     }
   }
 
@@ -518,7 +555,17 @@ export class Replayer {
    * @param timeOffset - number
    */
   public play(timeOffset = 0) {
-    if (this.service.state.matches('paused')) {
+    if (this.config.fetchEvents) {
+      const targetTimestamp = this.timestampFromOffset(timeOffset);
+      if (this.needsBuffering(targetTimestamp)) {
+        this.enterBuffering(timeOffset, true);
+        return;
+      }
+    }
+    if (
+      this.service.state.matches('paused') ||
+      this.service.state.matches('buffering')
+    ) {
       this.service.send({ type: 'PLAY', payload: { timeOffset } });
     } else {
       this.service.send({ type: 'PAUSE' });
@@ -531,6 +578,13 @@ export class Replayer {
   }
 
   public pause(timeOffset?: number) {
+    if (this.config.fetchEvents && typeof timeOffset === 'number') {
+      const targetTimestamp = this.timestampFromOffset(timeOffset);
+      if (this.needsBuffering(targetTimestamp)) {
+        this.enterBuffering(timeOffset, false);
+        return;
+      }
+    }
     if (timeOffset === undefined && this.service.state.matches('playing')) {
       this.service.send({ type: 'PAUSE' });
     }
@@ -573,12 +627,317 @@ export class Replayer {
     const event = this.config.unpackFn
       ? this.config.unpackFn(rawEvent as string)
       : (rawEvent as eventWithTime);
-    if (indicatesTouchDevice(event)) {
-      this.mouse.classList.add('touch-device');
+    this.registerEvent(event);
+    if (isSegmentStartMarker(event)) {
+      const info = this.segments.get(markerSegmentStart(event))!;
+      if (info.markerInserted) {
+        return;
+      }
+      info.markerInserted = true;
     }
     void Promise.resolve().then(() =>
       this.service.send({ type: 'ADD_EVENT', payload: { event } }),
     );
+  }
+
+  private timestampFromOffset(timeOffset: number): number {
+    return this.service.state.context.events[0].timestamp + timeOffset;
+  }
+
+  private sortedSegmentStarts(): number[] {
+    return [...this.segments.keys()].sort((a, b) => a - b);
+  }
+
+  private indexInitialEvents(events: eventWithTime[]) {
+    for (const event of events) {
+      this.registerEvent(event);
+      if (isSegmentStartMarker(event)) {
+        this.segments.get(markerSegmentStart(event))!.markerInserted = true;
+      }
+    }
+  }
+
+  private registerEvent(event: eventWithTime) {
+    if (event.timestamp > this.recordingEndTs) {
+      this.recordingEndTs = event.timestamp;
+    }
+    if (indicatesTouchDevice(event)) {
+      this.mouse.classList.add('touch-device');
+    }
+    if (isSegmentStartMarker(event)) {
+      const segmentStart = markerSegmentStart(event);
+      if (!this.segments.has(segmentStart)) {
+        this.segments.set(segmentStart, {
+          segmentStart,
+          keyframe: markerIsKeyframe(event),
+          fetched: false,
+          fetching: false,
+          attempts: 0,
+          markerInserted: false,
+        });
+      }
+    }
+  }
+
+  private spliceSegmentMarker(segmentStart: number) {
+    const events = this.service.state.context.events;
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+      if (
+        isSegmentStartMarker(event) &&
+        markerSegmentStart(event) === segmentStart
+      ) {
+        events.splice(i, 1);
+        return;
+      }
+    }
+  }
+
+  private segmentIndexContaining(sorted: number[], timestamp: number): number {
+    let start = 0;
+    let end = sorted.length - 1;
+    let result = -1;
+    while (start <= end) {
+      const mid = Math.floor((start + end) / 2);
+      if (sorted[mid] <= timestamp) {
+        result = mid;
+        start = mid + 1;
+      } else {
+        end = mid - 1;
+      }
+    }
+    return result;
+  }
+
+  private needsBuffering(targetTimestamp: number): boolean {
+    return (
+      targetTimestamp < this.recordingEndTs &&
+      this.neededSegments(targetTimestamp).length > 0
+    );
+  }
+
+  private neededSegments(targetTimestamp: number): number[] {
+    const sorted = this.sortedSegmentStarts();
+    const index = this.segmentIndexContaining(sorted, targetTimestamp);
+    if (index < 0) return [];
+    let keyframe = index;
+    while (keyframe > 0 && !this.segments.get(sorted[keyframe])!.keyframe) {
+      keyframe--;
+    }
+    const needed: number[] = [];
+    for (let i = keyframe; i <= index; i++) {
+      const info = this.segments.get(sorted[i])!;
+      if (!info.fetched) needed.push(info.segmentStart);
+    }
+    return needed;
+  }
+
+  private enterBuffering(timeOffset: number, play: boolean) {
+    const alreadyBuffering = this.service.state.matches('buffering');
+    this.bufferingTarget = { offset: timeOffset, play };
+    if (alreadyBuffering) {
+      this.requestNeededSegments();
+    } else {
+      this.service.send({ type: 'BUFFER' });
+    }
+  }
+
+  private onEnterBuffering = () => {
+    for (const info of this.segments.values()) {
+      info.attempts = 0;
+    }
+    this.emitter.emit(ReplayerEvents.BufferingStart);
+    this.requestNeededSegments();
+  };
+
+  private onExitBuffering = () => {
+    this.bufferingTarget = null;
+    this.emitter.emit(ReplayerEvents.BufferingEnd);
+  };
+
+  private requestNeededSegments() {
+    if (!this.bufferingTarget) return;
+    const targetTimestamp = this.timestampFromOffset(
+      this.bufferingTarget.offset,
+    );
+    const needed = this.neededSegments(targetTimestamp);
+    if (needed.length === 0) {
+      this.resumeFromBuffering();
+      return;
+    }
+    const fetchable = needed.filter((segmentStart) =>
+      this.canFetch(segmentStart),
+    );
+    if (fetchable.length === 0 && !this.hasPendingFetches()) {
+      this.giveUpBuffering();
+      return;
+    }
+    for (const segmentStart of fetchable) {
+      this.fetchSegment(segmentStart);
+    }
+  }
+
+  private canFetch(segmentStart: number): boolean {
+    const info = this.segments.get(segmentStart);
+    if (!info || info.fetched || info.fetching) return false;
+    return info.attempts < maxSegmentFetchAttempts;
+  }
+
+  private giveUpBuffering() {
+    this.warn('[replayer] buffering aborted: segment fetch failed repeatedly');
+    if (this.bufferingTarget) {
+      const targetTimestamp = this.timestampFromOffset(
+        this.bufferingTarget.offset,
+      );
+      this.emitter.emit(ReplayerEvents.BufferingError, {
+        segmentStarts: this.neededSegments(targetTimestamp),
+      });
+    }
+    this.service.send({ type: 'PAUSE' });
+  }
+
+  private onTimerExhausted = () => {
+    if (!this.config.fetchEvents) return;
+    if (!this.service.state.matches('playing')) return;
+    this.bufferingTarget = { offset: this.getCurrentTime(), play: true };
+    this.service.send({ type: 'FINISHED' });
+    if (this.service.state.matches('buffering')) {
+      return;
+    }
+    this.bufferingTarget = null;
+    this.backToNormal();
+    this.emitter.emit(ReplayerEvents.Finish);
+  };
+
+  private onPrefetchAlarm = () => {
+    if (!this.config.fetchEvents) return;
+    if (!this.service.state.matches('playing')) return;
+    const playhead = this.timestampFromOffset(this.getCurrentTime());
+    const horizon = playhead + this.config.bufferAheadMs * this.timer.speed;
+    for (const segmentStart of this.sortedSegmentStarts()) {
+      if (segmentStart > horizon) break;
+      if (segmentStart < playhead) continue;
+      this.fetchSegment(segmentStart);
+    }
+  };
+
+  private fetchSegment(segmentStart: number) {
+    if (!this.config.fetchEvents) return;
+    if (!this.canFetch(segmentStart)) return;
+    if (this.inFlightFetches() >= maxConcurrentFetches) return;
+    const info = this.segments.get(segmentStart)!;
+    info.attempts += 1;
+    info.fetching = true;
+    void this.config.fetchEvents(segmentStart).then(
+      (batch) => {
+        info.fetching = false;
+        if (!this.acceptFetchedBatch(segmentStart, batch)) {
+          this.warn('[replayer] empty or out-of-range segment response', {
+            segmentStart,
+          });
+        }
+        this.onSegmentSettled();
+      },
+      (error) => {
+        info.fetching = false;
+        this.warn('[replayer] fetchEvents failed', error);
+        this.onSegmentSettled();
+      },
+    );
+  }
+
+  private acceptFetchedBatch(
+    segmentStart: number,
+    batch: Array<eventWithTime | string>,
+  ): boolean {
+    const events = batch.map((raw) =>
+      this.config.unpackFn
+        ? this.config.unpackFn(raw as string)
+        : (raw as eventWithTime),
+    );
+    let frontier: number | null = null;
+    for (const event of events) {
+      if (isSegmentStartMarker(event)) {
+        this.registerEvent(event);
+        const cs = markerSegmentStart(event);
+        if (cs > segmentStart && (frontier === null || cs > frontier)) {
+          frontier = cs;
+        }
+      }
+    }
+    const nextKnown = this.sortedSegmentStarts().find(
+      (cs) => cs > segmentStart,
+    );
+    const bound = frontier ?? nextKnown ?? Infinity;
+
+    let accepted = 0;
+    for (const event of events) {
+      if (isSegmentStartMarker(event)) {
+        const cs = markerSegmentStart(event);
+        const info = this.segments.get(cs)!;
+        if (cs >= bound && !info.markerInserted) {
+          info.markerInserted = true;
+          injectEvent(this.service.state.context.events, event);
+        }
+        continue;
+      }
+      if (event.timestamp < segmentStart || event.timestamp >= bound) {
+        continue;
+      }
+      this.registerEvent(event);
+      injectEvent(this.service.state.context.events, event);
+      accepted += 1;
+    }
+    if (accepted === 0) {
+      return false;
+    }
+    for (const cs of this.sortedSegmentStarts()) {
+      if (cs >= segmentStart && cs < bound) {
+        this.segments.get(cs)!.fetched = true;
+        this.spliceSegmentMarker(cs);
+      }
+    }
+    return true;
+  }
+
+  private onSegmentSettled() {
+    if (this.service.state.matches('buffering')) {
+      this.resumeFromBuffering();
+    } else if (this.service.state.matches('playing')) {
+      this.extendSchedule();
+    }
+  }
+
+  private inFlightFetches(): number {
+    let count = 0;
+    for (const info of this.segments.values()) {
+      if (info.fetching) count += 1;
+    }
+    return count;
+  }
+
+  private hasPendingFetches(): boolean {
+    return this.inFlightFetches() > 0;
+  }
+
+  private resumeFromBuffering() {
+    const target = this.bufferingTarget;
+    if (!target) return;
+    const targetTimestamp = this.timestampFromOffset(target.offset);
+    if (this.neededSegments(targetTimestamp).length > 0) {
+      this.requestNeededSegments();
+      return;
+    }
+    if (target.play) {
+      this.play(target.offset);
+    } else {
+      this.pause(target.offset);
+    }
+  }
+
+  private extendSchedule() {
+    if (!this.service.state.matches('playing')) return;
+    this.service.send({ type: 'RESCHEDULE' });
   }
 
   public enableInteract() {
@@ -779,6 +1138,9 @@ export class Replayer {
         const finish = () => {
           if (lastIndex < this.service.state.context.events.length - 1) {
             // more events have been added since the setTimeout
+            return;
+          }
+          if (this.config.fetchEvents) {
             return;
           }
           this.backToNormal();
