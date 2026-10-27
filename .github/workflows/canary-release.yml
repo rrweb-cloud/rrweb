@@ -1,16 +1,21 @@
 name: Canary release
 
 on:
-  push:
-    branches: [canary]
   workflow_dispatch:
+    inputs:
+      sha:
+        description: 'Commit sha to build, test and release (the pushed canary tip)'
+        required: true
 
 permissions:
   contents: write
 
 concurrency:
-  group: canary-release
-  cancel-in-progress: true
+  group: canary-release-${{ inputs.sha }}
+  cancel-in-progress: false
+
+env:
+  BACKEND_REPO: rrweb-cloud/backend
 
 jobs:
   build-and-release:
@@ -18,9 +23,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout Repo
+      - name: Validate the sha input
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          case "$INPUT_SHA" in
+            ''|*[!0-9a-fA-F]*) echo "::error::sha input must be a hex commit sha"; exit 1 ;;
+          esac
+          if [ "${#INPUT_SHA}" -lt 7 ] || [ "${#INPUT_SHA}" -gt 40 ]; then
+            echo "::error::sha input must be 7–40 hex characters"; exit 1
+          fi
+          echo "SHA=${INPUT_SHA}" >> "$GITHUB_ENV"
+
+      - name: Checkout the pushed canary sha
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.SHA }}
           fetch-depth: 0
 
       - name: Setup Node.js lts/*
@@ -68,20 +86,36 @@ jobs:
           printf 'packaging:\n'; printf '  %s\n' "${dist_dirs[@]}"
           tar -czf canary-dist.tgz "${dist_dirs[@]}"
 
-      - name: Create canary release
+      - name: Create the canary release
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sha="${GITHUB_SHA}"
-          tag="canary-${sha:0:12}"
+          tag="canary-${SHA:0:12}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           gh release delete "${tag}" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag 2>/dev/null || true
           gh release create "${tag}" canary-dist.tgz \
             --repo "${GITHUB_REPOSITORY}" \
-            --target "${sha}" \
+            --target "${SHA}" \
             --title "Canary ${tag}" \
-            --notes "Built and tested from the \`canary\` branch at ${sha}. Asset \`canary-dist.tgz\` contains packages/*/dist for the rrweb cloud CDN canary channel."
+            --notes "Built and tested from \`${SHA}\` (pushed to the \`canary\` branch). Asset \`canary-dist.tgz\` is packages/*/dist for the rrweb cloud CDN canary channel."
           {
             printf '### 🐤 Canary release %s\n\n' "${tag}"
-            printf 'Built from `canary` @ `%s`\n' "${sha}"
-            printf 'Asset: `canary-dist.tgz` (packages/*/dist)\n'
+            printf 'Built and tested from `%s`\n' "${SHA}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify the backend that the release is published
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.BACKEND_DISPATCH_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::BACKEND_DISPATCH_TOKEN not set — backend PRs will not auto-green; re-run their canary-ready check manually."
+            exit 0
+          fi
+          gh api "repos/${BACKEND_REPO}/dispatches" \
+            -f event_type=canary-release-published \
+            -F "client_payload[sha]=${SHA}" \
+            -F "client_payload[tag]=${RELEASE_TAG}" \
+            || echo "::warning::backend dispatch failed — re-run the canary-ready check manually."
