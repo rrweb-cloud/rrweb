@@ -1,0 +1,87 @@
+name: Canary release
+
+on:
+  push:
+    branches: [canary]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: canary-release
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    name: Build, test and release the canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js lts/*
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: 'yarn'
+
+      - name: Install Dependencies
+        run: yarn install --frozen-lockfile
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: true
+
+      - name: Build Project
+        run: NODE_OPTIONS='--max-old-space-size=4096' yarn build:all
+
+      - name: Install Playwright browsers
+        run: cd packages/rrvideo && yarn playwright install chromium
+
+      - name: Read Puppeteer browser revision
+        id: puppeteer-browser
+        run: |
+          revision=$(node -p "require('./.puppeteerrc.cjs').browserRevision")
+          echo "revision=${revision}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: ${{ steps.puppeteer-browser.outputs.revision }}
+
+      - name: Check types
+        run: yarn check-types
+
+      - name: Run tests
+        run: PUPPETEER_EXECUTABLE_PATH=${{ steps.setup-chrome.outputs.chrome-path }} PUPPETEER_HEADLESS=true xvfb-run --server-args="-screen 0 1920x1080x24" yarn test
+
+      - name: Package canary dist
+        run: |
+          mapfile -t dist_dirs < <(find packages -mindepth 2 -maxdepth 2 -type d -name dist | sort)
+          if [ "${#dist_dirs[@]}" -eq 0 ]; then
+            echo "::error::no packages/*/dist directories were produced by build:all"
+            exit 1
+          fi
+          printf 'packaging:\n'; printf '  %s\n' "${dist_dirs[@]}"
+          tar -czf canary-dist.tgz "${dist_dirs[@]}"
+
+      - name: Create canary release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="${GITHUB_SHA}"
+          tag="canary-${sha:0:12}"
+          gh release delete "${tag}" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "${tag}" canary-dist.tgz \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${sha}" \
+            --title "Canary ${tag}" \
+            --notes "Built and tested from the \`canary\` branch at ${sha}. Asset \`canary-dist.tgz\` contains packages/*/dist for the rrweb cloud CDN canary channel."
+          {
+            printf '### 🐤 Canary release %s\n\n' "${tag}"
+            printf 'Built from `canary` @ `%s`\n' "${sha}"
+            printf 'Asset: `canary-dist.tgz` (packages/*/dist)\n'
+          } >> "$GITHUB_STEP_SUMMARY"
