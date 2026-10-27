@@ -7,8 +7,7 @@ on:
         description: 'Commit sha to build, test and release (the pushed canary tip)'
         required: true
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: canary-release-${{ inputs.sha }}
@@ -22,6 +21,8 @@ jobs:
     name: Build, test and release the canary
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: write
     steps:
       - name: Validate the sha input
         env:
@@ -36,13 +37,14 @@ jobs:
           echo "SHA=${INPUT_SHA}" >> "$GITHUB_ENV"
 
       - name: Checkout the pushed canary sha
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ env.SHA }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Node.js lts/*
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: lts/*
           cache: 'yarn'
@@ -66,7 +68,7 @@ jobs:
 
       - name: Setup Chrome
         id: setup-chrome
-        uses: browser-actions/setup-chrome@v2
+        uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4
         with:
           chrome-version: ${{ steps.puppeteer-browser.outputs.revision }}
 
@@ -74,7 +76,10 @@ jobs:
         run: yarn check-types
 
       - name: Run tests
-        run: PUPPETEER_EXECUTABLE_PATH=${{ steps.setup-chrome.outputs.chrome-path }} PUPPETEER_HEADLESS=true xvfb-run --server-args="-screen 0 1920x1080x24" yarn test
+        env:
+          PUPPETEER_EXECUTABLE_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
+          PUPPETEER_HEADLESS: 'true'
+        run: xvfb-run --server-args="-screen 0 1920x1080x24" yarn test
 
       - name: Package canary dist
         run: |
@@ -108,14 +113,10 @@ jobs:
         if: success()
         env:
           GH_TOKEN: ${{ secrets.BACKEND_DISPATCH_TOKEN }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           if [ -z "${GH_TOKEN}" ]; then
             echo "::warning::BACKEND_DISPATCH_TOKEN not set — backend PRs will not auto-green; re-run their canary-ready check manually."
             exit 0
           fi
-          gh api "repos/${BACKEND_REPO}/dispatches" \
-            -f event_type=canary-release-published \
-            -F "client_payload[sha]=${SHA}" \
-            -F "client_payload[tag]=${RELEASE_TAG}" \
-            || echo "::warning::backend dispatch failed — re-run the canary-ready check manually."
+          gh workflow run vendor-canary-ci.yml --repo "${BACKEND_REPO}" \
+            || echo "::warning::backend re-check dispatch failed — re-run the canary-ready check manually."
