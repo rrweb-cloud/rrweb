@@ -455,13 +455,10 @@ export default class MutationBuffer {
       this.flushTimer = null;
     }
     if (nextDueAt !== Infinity) {
-      this.flushTimer = setTimeout(
-        () => {
-          this.flushTimer = null;
-          this.emit();
-        },
-        Math.max(0, nextDueAt - now),
-      );
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = null;
+        this.emit();
+      }, Math.max(0, nextDueAt - now));
     }
 
     // payload may be empty if the mutations happened in some blocked elements
