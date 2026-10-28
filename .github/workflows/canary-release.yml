@@ -88,8 +88,13 @@ jobs:
             echo "::error::no packages/*/dist directories were produced by build:all"
             exit 1
           fi
-          printf 'packaging:\n'; printf '  %s\n' "${dist_dirs[@]}"
-          tar -czf canary-dist.tgz "${dist_dirs[@]}"
+          manifests=()
+          for d in "${dist_dirs[@]}"; do
+            m="${d%/dist}/package.json"
+            [ -f "$m" ] && manifests+=("$m")
+          done
+          printf 'packaging:\n'; printf '  %s\n' "${dist_dirs[@]}" "${manifests[@]}"
+          tar -czf canary-dist.tgz "${dist_dirs[@]}" "${manifests[@]}"
 
       - name: Create the canary release
         id: release
@@ -109,7 +114,7 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --target "${SHA}" \
               --title "Canary ${tag}" \
-              --notes "Built and tested from \`${SHA}\` (pushed to the \`canary\` branch). Asset \`canary-dist.tgz\` is packages/*/dist for the rrweb cloud CDN canary channel."
+              --notes "Built and tested from \`${SHA}\` (pushed to the \`canary\` branch). Asset \`canary-dist.tgz\` is packages/*/dist plus each package.json for the rrweb cloud CDN canary channel."
             {
               printf '### 🐤 Canary release %s\n\n' "${tag}"
               printf 'Built and tested from `%s`\n' "${SHA}"
@@ -120,10 +125,11 @@ jobs:
         if: success()
         env:
           GH_TOKEN: ${{ secrets.BACKEND_DISPATCH_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           if [ -z "${GH_TOKEN}" ]; then
             echo "::warning::BACKEND_DISPATCH_TOKEN not set — backend PRs will not auto-green; re-run their canary-ready check manually."
             exit 0
           fi
-          gh workflow run vendor-canary-ci.yml --repo "${BACKEND_REPO}" \
+          gh workflow run vendor-canary-ci.yml --repo "${BACKEND_REPO}" -f tag="${TAG}" \
             || echo "::warning::backend re-check dispatch failed — re-run the canary-ready check manually."
