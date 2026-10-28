@@ -98,16 +98,23 @@ jobs:
         run: |
           tag="canary-${SHA:0:12}"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          gh release delete "${tag}" --repo "${GITHUB_REPOSITORY}" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "${tag}" canary-dist.tgz \
-            --repo "${GITHUB_REPOSITORY}" \
-            --target "${SHA}" \
-            --title "Canary ${tag}" \
-            --notes "Built and tested from \`${SHA}\` (pushed to the \`canary\` branch). Asset \`canary-dist.tgz\` is packages/*/dist for the rrweb cloud CDN canary channel."
-          {
-            printf '### 🐤 Canary release %s\n\n' "${tag}"
-            printf 'Built and tested from `%s`\n' "${SHA}"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "release ${tag} already exists — keeping the immutable artifact; this rerun does not replace it."
+            {
+              printf '### 🐤 Canary release %s (already published)\n\n' "${tag}"
+              printf 'A release for `%s` already exists; kept as-is (immutable).\n' "${SHA}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh release create "${tag}" canary-dist.tgz \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${SHA}" \
+              --title "Canary ${tag}" \
+              --notes "Built and tested from \`${SHA}\` (pushed to the \`canary\` branch). Asset \`canary-dist.tgz\` is packages/*/dist for the rrweb cloud CDN canary channel."
+            {
+              printf '### 🐤 Canary release %s\n\n' "${tag}"
+              printf 'Built and tested from `%s`\n' "${SHA}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Notify the backend that the release is published
         if: success()
