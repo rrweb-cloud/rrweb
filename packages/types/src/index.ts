@@ -787,6 +787,9 @@ export enum ReplayerEvents {
   StateChange = 'state-change',
   PlayBack = 'play-back',
   Destroy = 'destroy',
+  StallStart = 'stall-start',
+  StallEnd = 'stall-end',
+  StallError = 'stall-error',
 }
 
 export type KeepIframeSrcFn = (src: string) => boolean;
