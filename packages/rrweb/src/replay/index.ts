@@ -144,7 +144,7 @@ function isDuplicateEvent(a: eventWithTime, b: eventWithTime): boolean {
 }
 
 function stringifyWithoutDelay(event: eventWithTime): string {
-  return JSON.stringify(event, (key, value) =>
+  return JSON.stringify(event, (key: string, value: unknown) =>
     key === 'delay' ? undefined : value,
   );
 }
