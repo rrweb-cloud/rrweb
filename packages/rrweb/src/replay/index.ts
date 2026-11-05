@@ -140,7 +140,13 @@ function isDuplicateEvent(a: eventWithTime, b: eventWithTime): boolean {
   if (earlyOut) {
     return false;
   }
-  return JSON.stringify(a) === JSON.stringify(b);
+  return stringifyWithoutDelay(a) === stringifyWithoutDelay(b);
+}
+
+function stringifyWithoutDelay(event: eventWithTime): string {
+  return JSON.stringify(event, (key, value) =>
+    key === 'delay' ? undefined : value,
+  );
 }
 
 export class Replayer {
