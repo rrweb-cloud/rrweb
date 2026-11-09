@@ -207,6 +207,8 @@ export type playerConfig = {
     resolveAuto?: boolean;
     pack?: CursorPack;
   };
+  smoothCursor: boolean;
+  smoothScroll: boolean;
   mouseTail:
     | boolean
     | {
