@@ -141,7 +141,6 @@ export default class MutationBuffer {
   }
 
   public unfreeze(now: number) {
-    const now = nowTimestamp();
     this.frozen = false;
     this.emit(now);
   }
