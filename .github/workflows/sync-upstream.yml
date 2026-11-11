@@ -1,0 +1,42 @@
+name: Sync main with upstream
+
+on:
+  schedule:
+    - cron: '27 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge rrweb-io/rrweb main into main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN }}
+
+      - name: Merge upstream/main (keeping the canary-release commit)
+        env:
+          GIT_AUTHOR_NAME: rrweb-cloud-bot
+          GIT_AUTHOR_EMAIL: bot@rrweb.cloud
+          GIT_COMMITTER_NAME: rrweb-cloud-bot
+          GIT_COMMITTER_EMAIL: bot@rrweb.cloud
+        run: |
+          git remote add upstream https://github.com/rrweb-io/rrweb.git
+          git fetch --no-tags upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already up to date with upstream/main."; exit 0
+          fi
+          if ! git merge --no-edit --no-ff upstream/main; then
+            git merge --abort || true
+            echo "::error::Conflict syncing upstream/main (likely an upstream change touching canary-release.yml) — resolve by hand."
+            exit 1
+          fi
+          git push origin HEAD:main
