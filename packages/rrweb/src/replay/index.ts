@@ -30,6 +30,7 @@ import type {
 import * as mittProxy from 'mitt';
 import { Timer } from './timer';
 import { defaultCursorPack, resolveCursor } from './cursor';
+import { drawTaperedTrail, SmoothReplay } from './smooth';
 import {
   createPlayerService,
   createSpeedService,
@@ -153,7 +154,7 @@ export class Replayer {
   private cursorPressed = false;
   private cursorPointer: CursorState['pointerType'] = 'mouse';
   private lastTouch = { x: NaN, y: NaN };
-
+  private smooth: SmoothReplay;
   private emitter: Emitter = mitt();
 
   private nextUserInteractionEvent: eventWithTime | null;
@@ -219,6 +220,8 @@ export class Replayer {
       triggerFocus: true,
       UNSAFE_replayCanvas: false,
       pauseAnimation: true,
+      smoothCursor: false,
+      smoothScroll: false,
       mouseTail: defaultMouseTailConfig,
       useVirtualDom: true, // Virtual-dom optimization is enabled by default.
       logger: console,
@@ -447,6 +450,9 @@ export class Replayer {
     if (this.service.state.context.events.find(indicatesTouchDevice)) {
       this.mouse.classList.add('touch-device');
     }
+    this.smooth = new SmoothReplay(this, this.mouse, (p) =>
+      this.drawMouseTail(p),
+    );
   }
 
   public on(event: string, handler: Handler) {
@@ -466,6 +472,7 @@ export class Replayer {
         key as keyof playerConfig
       ] = config[key as keyof playerConfig];
     });
+    this.smooth.configure();
     if (!this.config.skipInactive) {
       this.backToNormal();
     }
@@ -1949,26 +1956,19 @@ export class Replayer {
       return this.debugNodeNotFound(d, d.id);
     }
     const sn = this.mirror.getMeta(target);
+    const behavior = isSync || this.config.smoothScroll ? 'instant' : 'smooth';
     if (target === this.iframe.contentDocument) {
-      this.iframe.contentWindow?.scrollTo({
-        top: d.y,
-        left: d.x,
-        behavior: isSync ? 'auto' : 'smooth',
-      });
+      this.iframe.contentWindow?.scrollTo({ top: d.y, left: d.x, behavior });
     } else if (sn?.type === NodeType.Document) {
       // nest iframe content document
       (target as Document).defaultView?.scrollTo({
         top: d.y,
         left: d.x,
-        behavior: isSync ? 'auto' : 'smooth',
+        behavior,
       });
     } else {
       try {
-        (target as Element).scrollTo({
-          top: d.y,
-          left: d.x,
-          behavior: isSync ? 'auto' : 'smooth',
-        });
+        (target as Element).scrollTo({ top: d.y, left: d.x, behavior });
       } catch (error) {
         /**
          * Seldomly we may found scroll target was removed before
@@ -2252,7 +2252,7 @@ export class Replayer {
 
     this.mouse.style.left = `${_x}px`;
     this.mouse.style.top = `${_y}px`;
-    if (!isSync) {
+    if (!isSync && !this.config.smoothCursor) {
       this.drawMouseTail({ x: _x, y: _y });
     }
     this.hoverElements(target as Element);
@@ -2342,10 +2342,13 @@ export class Replayer {
         return;
       }
       ctx.clearRect(0, 0, this.mouseTail.width, this.mouseTail.height);
-      ctx.beginPath();
-      ctx.lineWidth = lineWidth;
       ctx.lineCap = lineCap;
       ctx.strokeStyle = strokeStyle;
+      if (this.config.smoothCursor) {
+        return drawTaperedTrail(ctx, this.tailPositions, lineWidth);
+      }
+      ctx.beginPath();
+      ctx.lineWidth = lineWidth;
       ctx.moveTo(this.tailPositions[0].x, this.tailPositions[0].y);
       this.tailPositions.forEach((p) => ctx.lineTo(p.x, p.y));
       ctx.stroke();
