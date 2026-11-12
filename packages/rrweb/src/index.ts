@@ -6,6 +6,7 @@ import {
   type SpeedMachineState,
 } from './replay';
 import canvasMutation from './replay/canvas';
+import { type StallController, StallEvents } from './replay/stall-controller';
 import { _mirror } from './utils';
 import * as utils from './utils';
 
@@ -46,4 +47,6 @@ export {
   canvasMutation,
   _mirror as mirror,
   utils,
+  type StallController,
+  StallEvents,
 };
