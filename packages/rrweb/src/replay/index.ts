@@ -117,8 +117,8 @@ const movePointer = (
   source === IncrementalSource.TouchMove
     ? 'touch'
     : current === 'touch'
-      ? 'mouse'
-      : current;
+    ? 'mouse'
+    : current;
 
 function indicatesTouchDevice(e: eventWithTime) {
   return (
@@ -1385,12 +1385,12 @@ export class Replayer {
                 PointerTypes[d.pointerType],
               ) as CursorState['pointerType'])
             : d.type === MouseInteractions.TouchStart ||
-                d.type === MouseInteractions.TouchEnd
-              ? 'touch'
-              : d.type === MouseInteractions.MouseDown ||
-                  d.type === MouseInteractions.MouseUp
-                ? 'mouse'
-                : null;
+              d.type === MouseInteractions.TouchEnd
+            ? 'touch'
+            : d.type === MouseInteractions.MouseDown ||
+              d.type === MouseInteractions.MouseUp
+            ? 'mouse'
+            : null;
         if (pointer) this.setPointer(pointer, d.x || 0, d.y || 0, isSync);
         if (d.type === MouseInteractions.MouseDown) this.cursorPressed = true;
         if (d.type === MouseInteractions.MouseUp) this.cursorPressed = false;
@@ -1758,8 +1758,8 @@ export class Replayer {
       const targetDoc = mutation.node.rootId
         ? mirror.getNode(mutation.node.rootId)
         : this.usingVirtualDom
-          ? this.virtualDom
-          : this.iframe.contentDocument;
+        ? this.virtualDom
+        : this.iframe.contentDocument;
       if (isSerializedIframe<typeof parent>(parent, mirror)) {
         this.attachDocumentToIframe(
           mutation,
