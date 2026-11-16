@@ -537,15 +537,27 @@ export class Replayer {
   }
 
   public isPlaying(): boolean {
-    return this.service.state.matches('playing');
+    return (
+      this.service.state.matches('playing') ||
+      (this.service.state.matches('stalled') &&
+        this.resumeIntent?.play !== false)
+    );
+  }
+
+  public isPaused(): boolean {
+    return (
+      this.service.state.matches('paused') ||
+      (this.service.state.matches('stalled') &&
+        this.resumeIntent?.play === false)
+    );
   }
 
   public isStalled(): boolean {
     return this.service.state.matches('stalled');
   }
 
-  public getState(): PlayerMachineState['value'] {
-    return this.service.state.value;
+  public isLive(): boolean {
+    return this.service.state.matches('live');
   }
 
   public stall() {

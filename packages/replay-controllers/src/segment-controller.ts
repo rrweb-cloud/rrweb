@@ -134,7 +134,7 @@ export class SegmentController implements StallController {
   };
 
   private onPrefetchAlarm = () => {
-    if (!this.replayer.isPlaying()) return;
+    if (!this.replayer.isPlaying() || this.replayer.isStalled()) return;
     const playhead = this.timestampFromOffset(this.replayer.getCurrentTime());
     const horizon = playhead + this.bufferAheadMs * this.replayer.timer.speed;
     for (const seg of this.segments.values()) {
@@ -185,7 +185,7 @@ export class SegmentController implements StallController {
   }
 
   private extendSchedule() {
-    if (!this.replayer.isPlaying()) return;
+    if (!this.replayer.isPlaying() || this.replayer.isStalled()) return;
     this.replayer.reschedule();
   }
 

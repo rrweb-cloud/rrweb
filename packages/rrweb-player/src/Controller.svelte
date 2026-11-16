@@ -72,6 +72,7 @@
   }
   let timer: number | null = null;
   let playerState: PlayerMachineState['value'];
+  let lastRawState: PlayerMachineState['value'] = 'paused';
   $: {
     dispatch('ui-update-player-state', { payload: playerState });
   }
@@ -315,23 +316,36 @@
   onMount(() => {
     replayer.on('annotation', handleAnnotation);
     replayer.on('start', restoreCaptionOnSeek);
-    playerState = replayer.getState();
+    playerState = replayer.isLive()
+      ? 'live'
+      : replayer.isPlaying()
+        ? 'playing'
+        : 'paused';
     speedState = replayer.speedService.state.value;
     replayer.on(
       'state-change',
       (states) => {
         const { player, speed } = states as { player?: PlayerMachineState; speed?: SpeedMachineState };
-        if (player?.value && playerState !== player.value) {
-          playerState = player.value;
-          switch (playerState) {
+        if (player?.value && player.value !== lastRawState) {
+          lastRawState = player.value;
+          switch (player.value) {
             case 'playing':
               loopTimer();
               break;
             case 'paused':
+            case 'stalled':
               stopTimer();
               break;
             default:
               break;
+          }
+          const nextPlayerState = replayer.isLive()
+            ? 'live'
+            : replayer.isPlaying()
+              ? 'playing'
+              : 'paused';
+          if (playerState !== nextPlayerState) {
+            playerState = nextPlayerState;
           }
         }
         if (speed?.value && speedState !== speed.value) {
