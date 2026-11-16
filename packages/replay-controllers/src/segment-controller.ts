@@ -40,7 +40,6 @@ export function isSegmentStartMarker(
 
 export class SegmentController implements StallController {
   private segments = new Map<number, SegmentInfo>();
-  private stallTarget: { offset: number; play: boolean } | null = null;
 
   constructor(
     private replayer: Replayer,
@@ -96,18 +95,17 @@ export class SegmentController implements StallController {
   }
 
   public stallOnPlay(timeOffset: number): boolean {
-    return this.stallIfNeeded(timeOffset, true);
+    return this.stallIfNeeded(timeOffset);
   }
 
   public stallOnPause(timeOffset: number): boolean {
-    return this.stallIfNeeded(timeOffset, false);
+    return this.stallIfNeeded(timeOffset);
   }
 
-  private stallIfNeeded(timeOffset: number, play: boolean): boolean {
+  private stallIfNeeded(timeOffset: number): boolean {
     const targetTimestamp = this.timestampFromOffset(timeOffset);
     const needed = this.neededSegments(targetTimestamp);
     if (needed.length === 0) return false;
-    this.stallTarget = { offset: timeOffset, play };
     if (this.replayer.isStalled()) {
       this.requestSegments(needed);
     } else {
@@ -118,22 +116,20 @@ export class SegmentController implements StallController {
   }
 
   private onStallStart = () => {
-    if (!this.stallTarget) {
-      this.stallTarget = { offset: this.replayer.getCurrentTime(), play: true };
-    }
     // refresh fetch limits when we re-enter a stall e.g.
     // user clicking around timeline after earlier failure
     for (const seg of this.segments.values()) {
       seg.attempts = 0;
     }
     this.replayer.emit(StallEvents.BufferingStart);
-    const targetTimestamp = this.timestampFromOffset(this.stallTarget.offset);
+    const targetTimestamp = this.timestampFromOffset(
+      this.replayer.getResumeTarget().offset,
+    );
     const needed = this.neededSegments(targetTimestamp);
     this.requestSegments(needed);
   };
 
   private onStallEnd = () => {
-    this.stallTarget = null;
     this.replayer.emit(StallEvents.BufferingEnd);
   };
 
@@ -162,20 +158,19 @@ export class SegmentController implements StallController {
 
   private giveUpStalling() {
     this.warn('[replayer] buffering aborted: segment fetch failed repeatedly');
-    if (this.stallTarget) {
-      const targetTimestamp = this.timestampFromOffset(this.stallTarget.offset);
-      this.replayer.emit(ReplayerEvents.StallError, {
-        segmentStarts: this.neededSegments(targetTimestamp).map(
-          (info) => info.timestamp,
-        ),
-      });
-    }
+    const targetTimestamp = this.timestampFromOffset(
+      this.replayer.getResumeTarget().offset,
+    );
+    this.replayer.emit(ReplayerEvents.StallError, {
+      segmentStarts: this.neededSegments(targetTimestamp).map(
+        (info) => info.timestamp,
+      ),
+    });
     this.replayer.abortStall();
   }
 
   private resumeFromStall() {
-    const target = this.stallTarget;
-    if (!target) return;
+    const target = this.replayer.getResumeTarget();
     const targetTimestamp = this.timestampFromOffset(target.offset);
     const needed = this.neededSegments(targetTimestamp);
     if (needed.length > 0) {

@@ -211,6 +211,8 @@ export class Replayer {
   private adoptedStyleSheets: adoptedStyleSheetData[] = [];
 
   private stallController?: StallController;
+  private resumeIntent: { offset: number; play: boolean } | null = null;
+  private resumeOffsetIsFixed = false;
 
   constructor(
     events: Array<eventWithTime | string>,
@@ -558,6 +560,17 @@ export class Replayer {
     this.service.send({ type: 'PAUSE' });
   }
 
+  public getResumeTarget(): { offset: number; play: boolean } {
+    const intent = this.resumeIntent ?? {
+      offset: this.getCurrentTime(),
+      play: true,
+    };
+    return {
+      offset: this.resumeOffsetIsFixed ? intent.offset : this.getCurrentTime(),
+      play: intent.play,
+    };
+  }
+
   /**
    * Get the actual time offset the player is at now compared to the first event.
    */
@@ -590,9 +603,12 @@ export class Replayer {
    * @param timeOffset - number
    */
   public play(timeOffset = 0) {
+    this.resumeIntent = { offset: timeOffset, play: true };
+    this.resumeOffsetIsFixed = true;
     if (this.stallController?.stallOnPlay(timeOffset)) {
       return;
     }
+    this.resumeOffsetIsFixed = false;
     this.service.send({ type: 'PLAY', payload: { timeOffset } });
     this.iframe.contentDocument
       ?.getElementsByTagName('html')[0]
@@ -601,6 +617,10 @@ export class Replayer {
   }
 
   public pause(timeOffset?: number) {
+    const intentOffset =
+      typeof timeOffset === 'number' ? timeOffset : this.getCurrentTime();
+    this.resumeIntent = { offset: intentOffset, play: false };
+    this.resumeOffsetIsFixed = true;
     if (
       typeof timeOffset === 'number' &&
       this.stallController?.stallOnPause(timeOffset)
@@ -617,6 +637,8 @@ export class Replayer {
     if (typeof timeOffset === 'number') {
       this.play(timeOffset);
       this.service.send({ type: 'PAUSE' });
+      this.resumeIntent = { offset: intentOffset, play: false };
+      this.resumeOffsetIsFixed = true;
     }
     this.iframe.contentDocument
       ?.getElementsByTagName('html')[0]
