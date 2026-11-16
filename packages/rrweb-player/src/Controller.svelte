@@ -22,7 +22,7 @@
   export let replayer: Replayer;
   export let showCaptions = true;
   const updateTimeline = createTimelineIndex();
-  $: timeline = updateTimeline(replayer.service.state.context.events, replayer.config.inactivePeriodThreshold);
+  let timeline = updateTimeline(replayer.events, replayer.config.inactivePeriodThreshold);
   export let captionText: string | undefined = undefined;
   let activeCaptionText: string | undefined;
   $: captionText = showCaptions ? activeCaptionText : undefined;
@@ -71,7 +71,7 @@
     dispatch('ui-update-current-time', { payload: currentTime });
   }
   let timer: number | null = null;
-  let playerState: 'playing' | 'paused' | 'live';
+  let playerState: PlayerMachineState['value'];
   $: {
     dispatch('ui-update-player-state', { payload: playerState });
   }
@@ -87,8 +87,7 @@
     end: number;
   } | null = null;
 
-  let meta: playerMetaData;
-  $: meta = replayer.getMetaData();
+  let meta: playerMetaData = replayer.getMetaData();
   $: accessibleTime = Math.max(0, Math.min(meta.totalTime, Math.floor(currentTime / 1000) * 1000));
   let percentage: string;
   $: {
@@ -161,7 +160,7 @@
         }
       }
 
-      if (currentTime < meta.totalTime) {
+      if (currentTime < replayer.getMetaData().totalTime) {
         timer = requestAnimationFrame(update);
       }
     }
@@ -302,17 +301,21 @@
     skipInactive = !skipInactive;
   };
 
-  export const triggerUpdateMeta = () => {
-    return Promise.resolve().then(() => {
+  let updateMetaTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  const updateMeta = () => {
+    if (updateMetaTimeout) return;
+    updateMetaTimeout = setTimeout(() => {
+      updateMetaTimeout = null;
       meta = replayer.getMetaData();
-      timeline = updateTimeline(replayer.service.state.context.events, replayer.config.inactivePeriodThreshold);
-    });
+      timeline = updateTimeline(replayer.events, replayer.config.inactivePeriodThreshold);
+    }, 20); // throttle to protect against rapid calls to addEvent
   };
 
   onMount(() => {
     replayer.on('annotation', handleAnnotation);
     replayer.on('start', restoreCaptionOnSeek);
-    playerState = replayer.service.state.value;
+    playerState = replayer.getState();
     speedState = replayer.speedService.state.value;
     replayer.on(
       'state-change',
@@ -343,6 +346,7 @@
         onPauseHook = null;
       }
     });
+    replayer.on('events-updated', updateMeta);
 
     if (autoPlay) {
       replayer.play();
@@ -359,6 +363,8 @@
     captionUpdatePending = false;
     replayer.off('annotation', handleAnnotation);
     replayer.off('start', restoreCaptionOnSeek);
+    replayer.off('events-updated', updateMeta);
+    if (updateMetaTimeout) clearTimeout(updateMetaTimeout);
     replayer.pause();
     stopTimer();
   });
