@@ -177,20 +177,15 @@
   };
 
   export const toggle = () => {
-    switch (playerState) {
-      case 'playing':
-        pause();
-        break;
-      case 'paused':
-        play();
-        break;
-      default:
-        break;
+    if (replayer.isPlaying()) {
+      pause();
+    } else if (replayer.isPaused()) {
+      play();
     }
   };
 
   export const play = () => {
-    if (playerState !== 'paused') {
+    if (!replayer.isPaused()) {
       return;
     }
     if (finished) {
@@ -202,7 +197,7 @@
   };
 
   export const pause = () => {
-    if (playerState !== 'playing') {
+    if (!replayer.isPlaying()) {
       return;
     }
     replayer.pause();
@@ -214,7 +209,7 @@
     pauseAt = false;
     finished = false;
     const resumePlaying =
-      typeof play === 'boolean' ? play : playerState === 'playing';
+      typeof play === 'boolean' ? play : replayer.isPlaying();
     if (resumePlaying) {
       replayer.play(timeOffset);
     } else {
@@ -287,7 +282,7 @@
   };
 
   export const setSpeed = (newSpeed: number) => {
-    let needFreeze = playerState === 'playing';
+    let needFreeze = replayer.isPlaying();
     speed = newSpeed;
     if (needFreeze) {
       replayer.pause();
