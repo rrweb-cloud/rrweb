@@ -752,6 +752,7 @@ export type playerMetaData = {
 export type actionWithDelay = {
   doAction: () => void;
   delay: number;
+  isStallAction?: boolean;
 };
 
 export type Handler = (event?: unknown) => void;
@@ -797,6 +798,14 @@ export enum ReplayerEvents {
 export enum StallEvents {
   BufferingStart = 'buffering-start',
   BufferingEnd = 'buffering-end',
+}
+
+// can be used for deliberate Replayer interruption or to implement buffering
+export interface StallController {
+  registerEvent(event: eventWithTime): void;
+  stallOnPlay(timeOffset: number): boolean;
+  stallOnPause(timeOffset: number): boolean;
+  isStallMarker(event: eventWithTime): boolean;
 }
 
 export type KeepIframeSrcFn = (src: string) => boolean;

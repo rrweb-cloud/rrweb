@@ -84,6 +84,10 @@ export class Timer {
         break;
       }
     }
+    if (this.raf === null) {
+      // if an action itself cleared the timer
+      return;
+    }
     if (this.actions.length > 0) {
       if (this.onNearEnd && !this.nearEndFired) {
         const lastDelay = this.actions[this.actions.length - 1].delay;
@@ -122,6 +126,15 @@ export class Timer {
 
   public hasUpcomingActions() {
     return this.actions.length > 0;
+  }
+
+  public nextStallActionDelay(): number | null {
+    for (let i = this.actions.length - 1; i >= 0; i--) {
+      if (this.actions[i].isStallAction) {
+        return this.actions[i].delay;
+      }
+    }
+    return null;
   }
 
   private findActionIndex(action: actionWithDelay): number {

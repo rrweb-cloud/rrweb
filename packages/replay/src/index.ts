@@ -1,7 +1,5 @@
 import {
   Replayer,
-  StallEvents,
-  type StallController,
   type playerConfig,
   type PlayerMachineState,
   type SpeedMachineState,
@@ -10,9 +8,8 @@ import 'rrweb/dist/style.css';
 
 export {
   Replayer,
-  StallEvents,
-  type StallController,
   type playerConfig,
   type PlayerMachineState,
   type SpeedMachineState,
 };
+export { StallEvents, type StallController } from '@rrweb/types';

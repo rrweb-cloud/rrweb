@@ -110,7 +110,7 @@ export class SegmentController implements StallController {
       this.requestSegments(needed);
     } else {
       // synchronously picked up by onStallStart
-      this.replayer.stall();
+      this.replayer.stall(timeOffset);
     }
     return true;
   }
@@ -123,7 +123,7 @@ export class SegmentController implements StallController {
     }
     this.replayer.emit(StallEvents.BufferingStart);
     const targetTimestamp = this.timestampFromOffset(
-      this.replayer.getResumeTarget().offset,
+      this.replayer.getCurrentTime(),
     );
     const needed = this.neededSegments(targetTimestamp);
     this.requestSegments(needed);
@@ -159,7 +159,7 @@ export class SegmentController implements StallController {
   private giveUpStalling() {
     this.warn('[replayer] buffering aborted: segment fetch failed repeatedly');
     const targetTimestamp = this.timestampFromOffset(
-      this.replayer.getResumeTarget().offset,
+      this.replayer.getCurrentTime(),
     );
     this.replayer.emit(ReplayerEvents.StallError, {
       segmentStarts: this.neededSegments(targetTimestamp).map(
@@ -170,23 +170,15 @@ export class SegmentController implements StallController {
   }
 
   private resumeFromStall() {
-    const target = this.replayer.getResumeTarget();
-    const targetTimestamp = this.timestampFromOffset(target.offset);
+    const targetTimestamp = this.timestampFromOffset(
+      this.replayer.getCurrentTime(),
+    );
     const needed = this.neededSegments(targetTimestamp);
     if (needed.length > 0) {
       this.requestSegments(needed);
       return;
     }
-    if (target.play) {
-      this.replayer.play(target.offset);
-    } else {
-      this.replayer.pause(target.offset);
-    }
-  }
-
-  private extendSchedule() {
-    if (!this.replayer.isPlaying() || this.replayer.isStalled()) return;
-    this.replayer.reschedule();
+    this.replayer.clearStall();
   }
 
   private fetchSegment = (seg: SegmentInfo) => {
@@ -213,8 +205,6 @@ export class SegmentController implements StallController {
       .then(() => {
         if (this.replayer.isStalled()) {
           this.resumeFromStall();
-        } else if (this.replayer.isPlaying()) {
-          this.extendSchedule();
         }
       });
   };
