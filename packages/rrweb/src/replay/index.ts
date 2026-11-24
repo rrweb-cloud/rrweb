@@ -721,18 +721,15 @@ export class Replayer {
       events.push(event);
     } else {
       // events can arrive out of order in a realtime context
-      const injectIndex = findEventIndex(events, event.timestamp + 1);
-      for (
-        let i = injectIndex - 1;
-        i >= 0 && events[i].timestamp === event.timestamp;
-        i--
-      ) {
+      let i = findEventIndex(events, event.timestamp);
+      while (events[i]?.timestamp === event.timestamp) {
         if (isDuplicateEvent(events[i], event)) {
           return;
         }
+        i++;
       }
-      events.splice(injectIndex, 0, event);
-      nextEvent = events[injectIndex + 1] ?? null;
+      events.splice(i, 0, event); // after last same-timestamp event
+      nextEvent = events[i + 1] ?? null;
     }
     this.registerEvent(event);
 
