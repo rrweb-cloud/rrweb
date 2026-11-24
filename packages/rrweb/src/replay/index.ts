@@ -694,46 +694,64 @@ export class Replayer {
    * will be immediately applied (or scheduled)
    */
   public addEvent(rawEvent: eventWithTime | string) {
-    const event = this.config.unpackFn
-      ? this.config.unpackFn(rawEvent as string)
-      : (rawEvent as eventWithTime);
-    this.addEventInternal(event);
-    this.emitter.emit(ReplayerEvents.EventsUpdated);
+    this.injectEvents([rawEvent]);
   }
 
   public injectEvents(rawEvents: (eventWithTime | string)[]) {
-    for (const rawEvent of rawEvents) {
-      const event =
-        typeof rawEvent === 'string' && this.config.unpackFn
-          ? this.config.unpackFn(rawEvent)
-          : (rawEvent as eventWithTime);
-      this.injectEvent(event);
+    const events = this.service.state.context.events;
+    const unpackFn = this.config && this.config.unpackFn;
+    const newEvents = unpackFn
+      ? rawEvents.map((e) => unpackFn(e as string))
+      : (rawEvents as eventWithTime[]);
+
+    let i = 0;
+    while (i < newEvents.length) {
+      const event = newEvents[i];
+      const lastIndex = events.length - 1;
+
+      let k: number;
+      let j = i;
+      if (!events[lastIndex] || events[lastIndex].timestamp < event.timestamp) {
+        k = events.length;
+        j = newEvents.length - 1;
+      } else {
+        // events can arrive out of order in a realtime context
+        k = findEventIndex(events, event.timestamp);
+        let isDupe = false;
+        while (events[k]?.timestamp === event.timestamp) {
+          if (isDuplicateEvent(events[k], event)) {
+            isDupe = true;
+            break;
+          }
+          k++;
+        }
+        if (isDupe) {
+          i++;
+          continue;
+        }
+        const nextTimestamp = events[k]?.timestamp ?? Infinity;
+        while (
+          j + 1 < newEvents.length &&
+          newEvents[j + 1].timestamp > event.timestamp &&
+          newEvents[j + 1].timestamp < nextTimestamp
+        ) {
+          j++;
+        }
+      }
+
+      const nextEvent = events[k];
+      events.splice(k, 0, ...newEvents.slice(i, j + 1));
+      for (let m = i; m <= j; m++) {
+        this.registerEvent(newEvents[m]);
+        this.applyEvent(newEvents[m], nextEvent);
+      }
+      i = j + 1;
     }
     this.emitter.emit(ReplayerEvents.EventsUpdated);
   }
 
-  private injectEvent(event: eventWithTime) {
-    const events = this.service.state.context.events;
-    const lastIndex = events.length - 1;
-    let nextEvent = null;
-    if (!events[lastIndex] || events[lastIndex].timestamp < event.timestamp) {
-      // fast track
-      events.push(event);
-    } else {
-      // events can arrive out of order in a realtime context
-      let i = findEventIndex(events, event.timestamp);
-      while (events[i]?.timestamp === event.timestamp) {
-        if (isDuplicateEvent(events[i], event)) {
-          return;
-        }
-        i++;
-      }
-      events.splice(i, 0, event); // after last same-timestamp event
-      nextEvent = events[i + 1] ?? null;
-    }
-    this.registerEvent(event);
-
-    const { baselineTime, timer } = this.service.state.context;
+  private applyEvent(event: eventWithTime, nextEvent?: eventWithTime) {
+    const { baselineTime, timer, events } = this.service.state.context;
     const playheadTimestamp = events[0].timestamp + this.getCurrentTime();
     if (this.isStalled()) {
       // the event will be applied by play (or pause) when the stall exits

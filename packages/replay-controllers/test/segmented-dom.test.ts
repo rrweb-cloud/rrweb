@@ -611,4 +611,46 @@ describe('segmented-dom replay', function () {
     `);
     expect(result.calls).toEqual([T + 200, T + 100, T + 150]);
   });
+
+  describe('injectEvents insertion', () => {
+    const inject = (batch: string) =>
+      page.evaluate(`
+        (() => {
+          const { Replayer } = rrweb;
+          const replayer = new Replayer(noMarkers, {});
+          replayer.injectEvents([${batch}]);
+          return replayer.events.map((e) => e.timestamp - T);
+        })()
+      `);
+
+    it('block-splices a run of events into a single gap', async () => {
+      expect(await inject('click(T + 60), click(T + 70), click(T + 80)')).toEqual(
+        [0, 0, 0, 50, 60, 70, 80, 100],
+      );
+    });
+
+    it('appends a trailing run in order', async () => {
+      expect(await inject('click(T + 200), click(T + 300)')).toEqual([
+        0, 0, 0, 50, 100, 200, 300,
+      ]);
+    });
+
+    it('de-dupes a boundary event but inserts the rest of the run', async () => {
+      expect(await inject('click(T + 50), click(T + 70)')).toEqual([
+        0, 0, 0, 50, 70, 100,
+      ]);
+    });
+
+    it('does not block a run across an intervening existing event', async () => {
+      expect(await inject('click(T + 60), click(T + 200)')).toEqual([
+        0, 0, 0, 50, 60, 100, 200,
+      ]);
+    });
+
+    it('de-dupes a later same-timestamp run member instead of block-inserting it', async () => {
+      expect(await inject('segmentStart(T + 50), click(T + 50)')).toEqual([
+        0, 0, 0, 50, 50, 100,
+      ]);
+    });
+  });
 });
