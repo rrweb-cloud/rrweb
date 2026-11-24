@@ -638,8 +638,8 @@ export class Replayer {
   public pause(timeOffset?: number) {
     if (timeOffset === undefined && this.stallTimeOffset !== null) {
       timeOffset = this.stallTimeOffset;
-      this.stallTimeOffset = null;
     }
+    this.stallTimeOffset = null;
     this.stallResumePlay = false;
     if (
       typeof timeOffset === 'number' &&
