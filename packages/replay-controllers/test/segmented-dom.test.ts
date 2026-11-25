@@ -624,9 +624,9 @@ describe('segmented-dom replay', function () {
       `);
 
     it('block-splices a run of events into a single gap', async () => {
-      expect(await inject('click(T + 60), click(T + 70), click(T + 80)')).toEqual(
-        [0, 0, 0, 50, 60, 70, 80, 100],
-      );
+      expect(
+        await inject('click(T + 60), click(T + 70), click(T + 80)'),
+      ).toEqual([0, 0, 0, 50, 60, 70, 80, 100]);
     });
 
     it('appends a trailing run in order', async () => {
