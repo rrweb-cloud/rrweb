@@ -215,6 +215,8 @@ export class Replayer {
   private stallTimeOffset: number | null = null;
   private stallResumePlay = false;
 
+  private addEventEmitThrottle = 0;
+
   constructor(
     events: Array<eventWithTime | string>,
     config?: Partial<playerConfig>,
@@ -678,6 +680,7 @@ export class Replayer {
    */
   public destroy() {
     this.pause();
+    cancelAnimationFrame(this.addEventEmitThrottle);
     this.mirror.reset();
     this.styleMirror.reset();
     this.mediaManager.reset();
@@ -747,7 +750,11 @@ export class Replayer {
       }
       i = j + 1;
     }
-    this.emitter.emit(ReplayerEvents.EventsUpdated);
+    // throttle to protect against rapid calls to addEvent
+    cancelAnimationFrame(this.addEventEmitThrottle);
+    this.addEventEmitThrottle = requestAnimationFrame(() => {
+      this.emitter.emit(ReplayerEvents.EventsUpdated);
+    });
   }
 
   private applyEvent(event: eventWithTime, nextEvent?: eventWithTime) {

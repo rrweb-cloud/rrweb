@@ -313,9 +313,12 @@ describe('player annotations', () => {
 
   it('refreshes annotations when events are added after mounting', async () => {
     const player = await mount();
+    const updated = new Promise((r) =>
+      player.getReplayer().on('events-updated', () => r(undefined)),
+    );
     player.addEvent(annotation(7000, 'Added later'));
     player.addEvent(timelineMarker(7000, 'A new timeline marker'));
-    await new Promise((r) => setTimeout(r, 50));
+    await updated;
     await tick();
     await tick();
     player.goto(7000, false);
@@ -347,8 +350,11 @@ describe('player annotations', () => {
       'Existing caption',
     );
 
+    const updated = new Promise((r) =>
+      player.getReplayer().on('events-updated', () => r(undefined)),
+    );
     player.addEvent(addedEvent);
-    await new Promise((r) => setTimeout(r, 30));
+    await updated;
     await tick();
     await tick();
 
@@ -667,12 +673,15 @@ describe('player annotations', () => {
     const player = await mount();
     expect(target.querySelectorAll('.rr-custom-event')).toHaveLength(1);
     expect(target.querySelector('[title="annotation"]')).toBeNull();
+    const updated = new Promise((r) =>
+      player.getReplayer().on('events-updated', () => r(undefined)),
+    );
     player.addEvent({
       type: EventType.Annotation,
       timestamp: start + 7000,
       data: { type: 'caption', text: 123 } as never,
     });
-    await Promise.resolve();
+    await updated;
     await tick();
     await tick();
     player.goto(7000, false);
