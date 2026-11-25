@@ -215,7 +215,8 @@ export class Replayer {
   private stallTimeOffset: number | null = null;
   private stallResumePlay = false;
 
-  private addEventEmitThrottle = 0;
+  private pendingEvents: eventWithTime[] = [];
+  private addEventThrottle = 0;
 
   constructor(
     events: Array<eventWithTime | string>,
@@ -539,6 +540,7 @@ export class Replayer {
   }
 
   public get events(): eventWithTime[] {
+    this.injectEvents(); // flush this.pendingEvents
     return this.service.state.context.events;
   }
 
@@ -680,7 +682,7 @@ export class Replayer {
    */
   public destroy() {
     this.pause();
-    cancelAnimationFrame(this.addEventEmitThrottle);
+    cancelAnimationFrame(this.addEventThrottle);
     this.mirror.reset();
     this.styleMirror.reset();
     this.mediaManager.reset();
@@ -694,19 +696,44 @@ export class Replayer {
 
   /**
    * add a single event in a live context
-   * will be immediately applied (or scheduled)
+   * will be applied (or scheduled) in next animation frame
+   * or `await replayer.addEvent(e)` if you need synchronicity
    */
-  public addEvent(rawEvent: eventWithTime | string) {
-    this.injectEvents([rawEvent]);
+  public addEvent(rawEvent: eventWithTime | string): PromiseLike<void> {
+    const event = this.config.unpackFn
+      ? this.config.unpackFn(rawEvent as string)
+      : (rawEvent as eventWithTime);
+    this.pendingEvents.push(event);
+    cancelAnimationFrame(this.addEventThrottle);
+    this.addEventThrottle = requestAnimationFrame(() => this.injectEvents());
+    return {
+      then: (f, r) => {
+        this.injectEvents(); // when awaited, will fire before raf
+        return Promise.resolve().then(f, r);
+      },
+    };
   }
 
-  public injectEvents(rawEvents: (eventWithTime | string)[]) {
+  /**
+   * synchronously inject a batch of events at once
+   * note: will also flush any pending events from this.addEvent
+   * @param rawEvents either packed or unpacked, but assumed sorted
+   */
+  public injectEvents(rawEvents: (eventWithTime | string)[] = []) {
     const events = this.service.state.context.events;
     const unpackFn = this.config && this.config.unpackFn;
     const newEvents = unpackFn
       ? rawEvents.map((e) => unpackFn(e as string))
       : (rawEvents as eventWithTime[]);
 
+    if (this.pendingEvents.length) {
+      newEvents.push(...this.pendingEvents);
+      newEvents.sort((a, b) => a.timestamp - b.timestamp);
+      this.pendingEvents = [];
+    }
+    cancelAnimationFrame(this.addEventThrottle);
+
+    let hasNewEvents = false;
     let i = 0;
     while (i < newEvents.length) {
       const event = newEvents[i];
@@ -747,14 +774,13 @@ export class Replayer {
       for (let m = i; m <= j; m++) {
         this.registerEvent(newEvents[m]);
         this.applyEvent(newEvents[m], nextEvent);
+        hasNewEvents = true;
       }
       i = j + 1;
     }
-    // throttle to protect against rapid calls to addEvent
-    cancelAnimationFrame(this.addEventEmitThrottle);
-    this.addEventEmitThrottle = requestAnimationFrame(() => {
+    if (hasNewEvents) {
       this.emitter.emit(ReplayerEvents.EventsUpdated);
-    });
+    }
   }
 
   private applyEvent(event: eventWithTime, nextEvent?: eventWithTime) {
