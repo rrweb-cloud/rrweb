@@ -12,3 +12,4 @@ export {
   type PlayerMachineState,
   type SpeedMachineState,
 };
+export { StallEvents, type StallController } from '@rrweb/types';
