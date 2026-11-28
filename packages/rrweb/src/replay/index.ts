@@ -28,10 +28,12 @@ import type {
   Mirror as RRDOMMirror,
 } from 'rrdom';
 import * as mittProxy from 'mitt';
-import { Timer } from './timer';
+import { Timer, addDelay } from './timer';
+import { drawTaperedTrail, SmoothReplay } from './smooth';
 import {
   createPlayerService,
   createSpeedService,
+  findEventIndex,
   type PlayerMachineState,
   type SpeedMachineState,
 } from './machine';
@@ -70,6 +72,7 @@ import type {
   styleDeclarationData,
   adoptedStyleSheetData,
   serializedElementNodeWithId,
+  StallController,
 } from '@rrweb/types';
 import {
   polyfill,
@@ -103,6 +106,7 @@ const defaultMouseTailConfig = {
   lineCap: 'round',
   lineWidth: 3,
   strokeStyle: 'red',
+  taper: false,
 } as const;
 
 function indicatesTouchDevice(e: eventWithTime) {
@@ -134,6 +138,7 @@ export class Replayer {
   private mouse: HTMLDivElement;
   private mouseTail: HTMLCanvasElement | null = null;
   private tailPositions: Array<{ x: number; y: number }> = [];
+  private smooth: SmoothReplay;
 
   private emitter: Emitter = mitt();
 
@@ -178,6 +183,12 @@ export class Replayer {
   // Similar to the reason for constructedStyleMutations.
   private adoptedStyleSheets: adoptedStyleSheetData[] = [];
 
+  private stallControllers: StallController[] = [];
+  private stallTimeOffset: number | null = null;
+  private stallResumePlay = false;
+
+  private addEventEmitThrottle = 0;
+
   constructor(
     events: Array<eventWithTime | string>,
     config?: Partial<playerConfig>,
@@ -200,6 +211,7 @@ export class Replayer {
       triggerFocus: true,
       UNSAFE_replayCanvas: false,
       pauseAnimation: true,
+      smoothScroll: false,
       mouseTail: defaultMouseTailConfig,
       useVirtualDom: true, // Virtual-dom optimization is enabled by default.
       logger: console,
@@ -342,17 +354,17 @@ export class Replayer {
 
     const timer = new Timer([], {
       speed: this.config.speed,
+      onExhausted: this.onTimerExhausted,
     });
+    const unpackFn = config && config.unpackFn;
+    const initialEvents = (
+      unpackFn
+        ? events.map((e) => unpackFn(e as string))
+        : (events as eventWithTime[])
+    ).sort((a1, a2) => a1.timestamp - a2.timestamp);
     this.service = createPlayerService(
       {
-        events: events
-          .map((e) => {
-            if (config && config.unpackFn) {
-              return config.unpackFn(e as string);
-            }
-            return e as eventWithTime;
-          })
-          .sort((a1, a2) => a1.timestamp - a2.timestamp),
+        events: initialEvents,
         timer,
         timeOffset: 0,
         baselineTime: 0,
@@ -362,6 +374,8 @@ export class Replayer {
         getCastFn: this.getCastFn,
         applyEventsSynchronously: this.applyEventsSynchronously,
         emitter: this.emitter,
+        isStallMarker: (event) =>
+          this.stallControllers.some((sc) => sc.isStallMarker(event)),
       },
     );
     this.service.start();
@@ -387,6 +401,10 @@ export class Replayer {
       emitter: this.emitter,
       getCurrentTime: this.getCurrentTime.bind(this),
     });
+
+    for (const event of initialEvents) {
+      this.registerEvent(event);
+    }
 
     // rebuild first full snapshot as the poster of the player
     // maybe we can cache it for performance optimization
@@ -421,9 +439,9 @@ export class Replayer {
         );
       }, 1);
     }
-    if (this.service.state.context.events.find(indicatesTouchDevice)) {
-      this.mouse.classList.add('touch-device');
-    }
+    this.smooth = new SmoothReplay(this, this.mouse, (p) =>
+      this.drawMouseTail(p),
+    );
   }
 
   public on(event: string, handler: Handler) {
@@ -443,6 +461,7 @@ export class Replayer {
         key as keyof playerConfig
       ] = config[key as keyof playerConfig];
     });
+    this.smooth.configure();
     if (!this.config.skipInactive) {
       this.backToNormal();
     }
@@ -472,6 +491,13 @@ export class Replayer {
     }
   }
 
+  public addStallController(stallController: StallController) {
+    this.stallControllers.push(stallController);
+    this.service.state.context.events.forEach((e) =>
+      stallController.registerEvent(e),
+    );
+  }
+
   public getMetaData(): playerMetaData {
     const firstEvent = this.service.state.context.events[0];
     const lastEvent =
@@ -485,18 +511,69 @@ export class Replayer {
     };
   }
 
-  /**
-   * Get the actual time offset the player is at now compared to the first event.
-   */
-  public getCurrentTime(): number {
-    if (this.config.liveMode) {
-      this.timer.updateLiveTime();
+  public get events(): eventWithTime[] {
+    return this.service.state.context.events;
+  }
+
+  public isPlaying(): boolean {
+    return (
+      this.service.state.matches('playing') ||
+      (this.service.state.matches('stalled') && this.stallResumePlay)
+    );
+  }
+
+  public isPaused(): boolean {
+    return (
+      this.service.state.matches('paused') ||
+      (this.service.state.matches('stalled') && !this.stallResumePlay)
+    );
+  }
+
+  public isStalled(): boolean {
+    return this.service.state.matches('stalled');
+  }
+
+  public stall(timeOffset?: number) {
+    if (timeOffset !== undefined) {
+      this.stallTimeOffset = timeOffset;
     }
-    return this.timer.timeOffset + this.getTimeOffset();
+    this.service.send({ type: 'STALL' });
+  }
+
+  public clearStall() {
+    if (!this.isStalled()) return;
+    if (this.isPlaying()) {
+      this.play();
+    } else {
+      this.pause();
+    }
+  }
+
+  public abortStall() {
+    this.stallTimeOffset = null;
+    this.service.send({ type: 'PAUSE' });
   }
 
   /**
-   * Get the time offset the player is at now compared to the first event, but without regard for the timer.
+   * Get the time offset the player is at now compared to the first event.
+   * If stalled, report the time at which the player will resume at (not
+   * how much of the replay has been rendered)
+   */
+  public getCurrentTime(): number {
+    if (this.stallTimeOffset !== null) {
+      return this.stallTimeOffset;
+    }
+    if (this.config.liveMode) {
+      this.timer.updateLiveTime();
+    }
+    const lastPlayStart = this.getTimeOffset();
+    return lastPlayStart + this.timer.timeOffset;
+  }
+
+  /**
+   * @deprecated the offset at which playback last (re)started i.e.
+   * an internal detail of playhead computation.
+   * use getCurrentTime() for the playhead.
    */
   public getTimeOffset(): number {
     const { baselineTime, events } = this.service.state.context;
@@ -508,29 +585,48 @@ export class Replayer {
   }
 
   /**
-   * This API was designed to be used as play at any time offset.
-   * Since we minimized the data collected from recorder, we do not
-   * have the ability of undo an event.
-   * So the implementation of play at any time offset will always iterate
-   * all of the events, cast event before the offset synchronously
-   * and cast event after the offset asynchronously with timer.
-   * @param timeOffset - number
+   * Play the recording from the start (no argument) or from a specific
+   * millisecond offset onwards. Don't use absolute event timestamps.
+   * @param timeOffset - where to play from, in ms relative to the first
+   *   event; defaults to 0 or to the current position while stalled
    */
-  public play(timeOffset = 0) {
-    if (this.service.state.matches('paused')) {
-      this.service.send({ type: 'PLAY', payload: { timeOffset } });
-    } else {
-      this.service.send({ type: 'PAUSE' });
-      this.service.send({ type: 'PLAY', payload: { timeOffset } });
+  public play(timeOffset?: number) {
+    timeOffset = timeOffset ?? (this.isStalled() ? this.getCurrentTime() : 0);
+    this.stallTimeOffset = null;
+    this.stallResumePlay = true;
+    if (this.stallControllers.some((sc) => sc.stallOnPlay(timeOffset))) {
+      return;
     }
+    this.service.send({ type: 'PLAY', payload: { timeOffset } });
     this.iframe.contentDocument
       ?.getElementsByTagName('html')[0]
       ?.classList.remove('rrweb-paused');
     this.emitter.emit(ReplayerEvents.Start);
   }
 
+  /**
+   * Pause the recording where it is currently playing (no argument) or
+   * jump to a specific relative offset and pause there.
+   * @param timeOffset - offset to jump to and pause at, in ms relative to
+   *   the first event
+   */
   public pause(timeOffset?: number) {
-    if (timeOffset === undefined && this.service.state.matches('playing')) {
+    if (timeOffset === undefined && this.stallTimeOffset !== null) {
+      timeOffset = this.stallTimeOffset;
+    }
+    this.stallTimeOffset = null;
+    this.stallResumePlay = false;
+    if (
+      typeof timeOffset === 'number' &&
+      this.stallControllers.some((sc) => sc.stallOnPause(timeOffset))
+    ) {
+      return;
+    }
+    if (
+      timeOffset === undefined &&
+      (this.service.state.matches('playing') ||
+        this.service.state.matches('stalled'))
+    ) {
       this.service.send({ type: 'PAUSE' });
     }
     if (typeof timeOffset === 'number') {
@@ -557,6 +653,7 @@ export class Replayer {
    */
   public destroy() {
     this.pause();
+    cancelAnimationFrame(this.addEventEmitThrottle);
     this.mirror.reset();
     this.styleMirror.reset();
     this.mediaManager.reset();
@@ -568,17 +665,75 @@ export class Replayer {
     this.service.send({ type: 'TO_LIVE', payload: { baselineTime } });
   }
 
+  /**
+   * add a single event in a live context
+   * will be immediately applied (or scheduled)
+   */
   public addEvent(rawEvent: eventWithTime | string) {
     const event = this.config.unpackFn
       ? this.config.unpackFn(rawEvent as string)
       : (rawEvent as eventWithTime);
+    const events = this.service.state.context.events;
+    const lastIndex = events.length - 1;
+    let nextEvent = null;
+    if (!events[lastIndex] || events[lastIndex].timestamp <= event.timestamp) {
+      // fast track
+      events.push(event);
+    } else {
+      // events can arrive out of order in a realtime context
+      const injectIndex = findEventIndex(events, event.timestamp + 1);
+      events.splice(injectIndex, 0, event);
+      nextEvent = events[injectIndex + 1];
+    }
+    this.registerEvent(event);
+
+    const { baselineTime, timer } = this.service.state.context;
+    const playheadTimestamp = events[0].timestamp + this.getCurrentTime();
+    if (this.isStalled()) {
+      // the event will be applied by play (or pause) when the stall exits
+    } else if (event.timestamp < playheadTimestamp) {
+      if (nextEvent && nextEvent.timestamp < playheadTimestamp) {
+        // could fix with a debounced play/pause(getCurrentTime())
+        this.debug('Event received out of order', event, 'after', nextEvent);
+      } else {
+        // isSync e.g. live replay 'catchup'
+        this.getCastFn(event, true)();
+      }
+    } else if (timer.isActive()) {
+      addDelay(event, baselineTime);
+      timer.addAction({
+        doAction: this.getCastFn(event, false),
+        delay: event.delay!,
+      });
+    }
+    // The smoothing sees an added event once the player has taken it.
+    this.smooth.added(event);
+    // throttle to protect against rapid calls to addEvent
+    cancelAnimationFrame(this.addEventEmitThrottle);
+    this.addEventEmitThrottle = requestAnimationFrame(() => {
+      this.emitter.emit(ReplayerEvents.EventsUpdated);
+    });
+  }
+
+  private registerEvent(event: eventWithTime) {
     if (indicatesTouchDevice(event)) {
       this.mouse.classList.add('touch-device');
     }
-    void Promise.resolve().then(() =>
-      this.service.send({ type: 'ADD_EVENT', payload: { event } }),
-    );
+    this.stallControllers.forEach((sc) => sc.registerEvent(event));
   }
+
+  private onTimerExhausted = () => {
+    if (this.config.liveMode) return;
+    if (!this.service.state.matches('playing')) return;
+    // allow for checking whether new events aren't just about to be loaded in
+    setTimeout(() => {
+      if (this.timer.hasUpcomingActions()) return; // if added in 50ms window
+      if (!this.service.state.matches('playing')) return;
+      this.service.send('END');
+      this.backToNormal();
+      this.emitter.emit(ReplayerEvents.Finish);
+    }, 50);
+  };
 
   public enableInteract() {
     this.iframe.setAttribute('scrolling', 'auto');
@@ -763,33 +918,6 @@ export class Replayer {
       }
 
       this.service.send({ type: 'CAST_EVENT', payload: { event } });
-
-      // events are kept sorted by timestamp, check if this is the last event
-      const lastIndex = this.service.state.context.events.length - 1;
-      if (
-        !this.config.liveMode &&
-        event === this.service.state.context.events[lastIndex]
-      ) {
-        const finish = () => {
-          if (lastIndex < this.service.state.context.events.length - 1) {
-            // more events have been added since the setTimeout
-            return;
-          }
-          this.backToNormal();
-          this.service.send('END');
-          this.emitter.emit(ReplayerEvents.Finish);
-        };
-        let finishBuffer = 50; // allow for checking whether new events aren't just about to be loaded in
-        if (
-          event.type === EventType.IncrementalSnapshot &&
-          event.data.source === IncrementalSource.MouseMove &&
-          event.data.positions.length
-        ) {
-          // extend finish event if the last event is a mouse move so that the timer isn't stopped by the service before checking the last event
-          finishBuffer += Math.max(0, -event.data.positions[0].timeOffset);
-        }
-        setTimeout(finish, finishBuffer);
-      }
 
       this.emitter.emit(ReplayerEvents.EventCast, event);
     };
@@ -1897,26 +2025,24 @@ export class Replayer {
       return this.debugNodeNotFound(d, d.id);
     }
     const sn = this.mirror.getMeta(target);
+    // smoothScroll glides between samples itself, so it jumps to each one.
+    const behavior = this.config.smoothScroll
+      ? 'instant'
+      : isSync
+      ? 'auto'
+      : 'smooth';
     if (target === this.iframe.contentDocument) {
-      this.iframe.contentWindow?.scrollTo({
-        top: d.y,
-        left: d.x,
-        behavior: isSync ? 'auto' : 'smooth',
-      });
+      this.iframe.contentWindow?.scrollTo({ top: d.y, left: d.x, behavior });
     } else if (sn?.type === NodeType.Document) {
       // nest iframe content document
       (target as Document).defaultView?.scrollTo({
         top: d.y,
         left: d.x,
-        behavior: isSync ? 'auto' : 'smooth',
+        behavior,
       });
     } else {
       try {
-        (target as Element).scrollTo({
-          top: d.y,
-          left: d.x,
-          behavior: isSync ? 'auto' : 'smooth',
-        });
+        (target as Element).scrollTo({ top: d.y, left: d.x, behavior });
       } catch (error) {
         /**
          * Seldomly we may found scroll target was removed before
@@ -2200,7 +2326,7 @@ export class Replayer {
 
     this.mouse.style.left = `${_x}px`;
     this.mouse.style.top = `${_y}px`;
-    if (!isSync) {
+    if (!isSync && !this.config.cursor?.smooth) {
       this.drawMouseTail({ x: _x, y: _y });
     }
     this.hoverElements(target as Element);
@@ -2211,7 +2337,7 @@ export class Replayer {
       return;
     }
 
-    const { lineCap, lineWidth, strokeStyle, duration } =
+    const { lineCap, lineWidth, strokeStyle, duration, taper } =
       this.config.mouseTail === true
         ? defaultMouseTailConfig
         : Object.assign({}, defaultMouseTailConfig, this.config.mouseTail);
@@ -2225,10 +2351,13 @@ export class Replayer {
         return;
       }
       ctx.clearRect(0, 0, this.mouseTail.width, this.mouseTail.height);
-      ctx.beginPath();
-      ctx.lineWidth = lineWidth;
       ctx.lineCap = lineCap;
       ctx.strokeStyle = strokeStyle;
+      if (taper) {
+        return drawTaperedTrail(ctx, this.tailPositions, lineWidth);
+      }
+      ctx.beginPath();
+      ctx.lineWidth = lineWidth;
       ctx.moveTo(this.tailPositions[0].x, this.tailPositions[0].y);
       this.tailPositions.forEach((p) => ctx.lineTo(p.x, p.y));
       ctx.stroke();

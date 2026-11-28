@@ -1,5 +1,9 @@
 # @rrweb/rrweb-plugin-canvas-webrtc-replay
 
+## 2.3.1
+
+## 2.3.0
+
 ## 2.2.2
 
 ## 2.2.1
